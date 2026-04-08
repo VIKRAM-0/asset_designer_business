@@ -42,16 +42,63 @@ function makeGreyscaleTex(origTex: THREE.Texture) {
   }
 }
 
-const palette = [
-  { hex: '#c9a96e', name: 'Caramel' }, { hex: '#8b6f5e', name: 'Mocha' },
-  { hex: '#d4c5b0', name: 'Linen' }, { hex: '#3d3028', name: 'Espresso' },
-  { hex: '#f5f0e8', name: 'Cream' }, { hex: '#7a8c6e', name: 'Sage' },
-  { hex: '#4a6b8a', name: 'Slate' }, { hex: '#8b4a4a', name: 'Rust' },
-  { hex: '#2c2c2c', name: 'Charcoal' }, { hex: '#e8d5c4', name: 'Blush' },
-  { hex: '#5c4a3a', name: 'Walnut' }, { hex: '#9b8ea0', name: 'Mauve' },
-  { hex: '#c4b49a', name: 'Sand' }, { hex: '#4a5a4a', name: 'Forest' },
-  { hex: '#b8a090', name: 'Taupe' },
+// Fabric Library from update.html
+const BASE_URL = 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/';
+
+const fabricLibrary = [
+  { name: 'Boucle Fabric', folder: BASE_URL + 'boucle_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Cotton Fabric', folder: BASE_URL + 'cotton_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Curly Fabric', folder: BASE_URL + 'curly_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Dotted Fabric', folder: BASE_URL + 'dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Leather Fabric', folder: BASE_URL + 'leather_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Leather Dotted', folder: BASE_URL + 'leather_dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Line Fabric', folder: BASE_URL + 'line_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
+  { name: 'Printed Fabric', folder: BASE_URL + 'printted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } }
 ];
+
+// Smart Texture Loader (Checks multiple extensions)
+const texCache: { [key: string]: THREE.Texture } = {};
+const texLoader = new THREE.TextureLoader();
+texLoader.setCrossOrigin('anonymous');
+
+function tryLoadTexture(url: string, isSrgb: boolean): Promise<THREE.Texture> {
+  return new Promise((resolve, reject) => {
+    texLoader.load(
+      url,
+      (tex) => {
+        tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+        tex.encoding = isSrgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+        texCache[url] = tex;
+        resolve(tex);
+      },
+      undefined,
+      () => reject(new Error('File missing'))
+    );
+  });
+}
+
+// Automatically loops through possible extensions until it finds the correct one
+async function loadTextureWithFallbacks(folder: string, fileName: string, isSrgb: boolean): Promise<{ tex: THREE.Texture | null, url: string | null }> {
+  const extensions = ['.webp', '.jpg', '.png', '.jpeg'];
+  
+  for (let ext of extensions) {
+    const url = `${folder}/${fileName}${ext}`;
+    
+    // Check Cache first
+    if (texCache[url]) return { tex: texCache[url], url };
+    
+    // Try to load
+    try {
+      const tex = await tryLoadTexture(url, isSrgb);
+      return { tex, url };
+    } catch (e) {
+      // Silently move to the next extension
+    }
+  }
+  
+  console.warn(`Could not find texture map for: ${folder}/${fileName}`);
+  return { tex: null, url: null };
+}
 
 type MeshEntry = {
   id: string;
@@ -69,9 +116,8 @@ const defaultProperties = {
   roughness: 0.7,
   metalness: 0.0,
   sheen: 0.0,
-  texScale: 2.0,
+  texScale: 3.0,
   normScale: 1.0,
-  activeHex: '#c9a96e',
   brightness: 1.0
 };
 
@@ -83,7 +129,6 @@ export default function App() {
   const [hasModel, setHasModel] = useState(false);
   
   const [meshEntries, setMeshEntries] = useState<MeshEntry[]>([]);
-  const [activeHex, setActiveHex] = useState(defaultProperties.activeHex);
   
   const [pbrTextures, setPbrTextures] = useState<{
     map: THREE.Texture | null;
@@ -100,6 +145,8 @@ export default function App() {
   
   const [renderedImage, setRenderedImage] = useState<string | null>(null);
   const [isRendering, setIsRendering] = useState(false);
+
+  const [fabricThumbnails, setFabricThumbnails] = useState<{ [key: number]: string | null }>({});
 
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
@@ -247,6 +294,26 @@ export default function App() {
     };
   }, [camUpdate]);
 
+  // Load fabric thumbnails
+  useEffect(() => {
+    const loadThumbnails = async () => {
+      const thumbnails: { [key: number]: string | null } = {};
+      
+      for (let i = 0; i < fabricLibrary.length; i++) {
+        try {
+          const result = await loadTextureWithFallbacks(fabricLibrary[i].folder, 'BaseColor', true);
+          thumbnails[i] = result.url;
+        } catch (e) {
+          thumbnails[i] = null;
+        }
+      }
+      
+      setFabricThumbnails(thumbnails);
+    };
+    
+    loadThumbnails();
+  }, []);
+
   const onGLBBuffer = (arrayBuffer: ArrayBuffer) => {
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
@@ -309,7 +376,7 @@ export default function App() {
               if (origGreyscaleMap) greyMat.map = origGreyscaleMap;
             }
 
-            greyMat.color = new THREE.Color(activeHex);
+            // Don't set default color - fabrics will handle this
             greyMat.needsUpdate = true;
 
             let rawName = origMat.name || mesh.name || '';
@@ -493,7 +560,7 @@ export default function App() {
         }
 
         if (!pbrTextures.map) {
-           newEntry.greyMat.color.set(new THREE.Color(activeHex)).multiplyScalar(brightness);
+           newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
         } else {
            newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
         }
@@ -505,19 +572,81 @@ export default function App() {
     }));
   };
 
-  const applyColorToChecked = (hex: string) => {
-    setActiveHex(hex);
-    setMeshEntries(prev => {
-      const next = [...prev];
-      next.forEach(entry => {
-        if (!entry.checked) return;
-        if (!pbrTextures.map) {
-            entry.greyMat.color.set(new THREE.Color(hex)).multiplyScalar(brightness);
-            entry.greyMat.needsUpdate = true;
-        }
+  // Apply Fabric with Smart Auto-Discovery
+  const applyFabric = async (idx: number) => {
+    const fabric = fabricLibrary[idx];
+    const hasChecked = meshEntries.some(e => e.checked);
+    
+    if (!hasChecked) {
+      showToast("Select a part in the right panel first!");
+      return;
+    }
+
+    setLoading(true);
+    setLoadingMsg('Applying Textures...');
+    
+    try {
+      // Automatically find the correct extension for each map type
+      const [diffRes, normRes, roughRes] = await Promise.all([
+        loadTextureWithFallbacks(fabric.folder, 'BaseColor', true),
+        loadTextureWithFallbacks(fabric.folder, 'Normal', false),
+        loadTextureWithFallbacks(fabric.folder, 'Roughness', false)
+      ]);
+
+      const diffTex = diffRes.tex;
+      const normTex = normRes.tex;
+      const roughTex = roughRes.tex;
+
+      // Pull defaults defined in fabricLibrary
+      const bright = fabric.defaults.brightness !== undefined ? fabric.defaults.brightness : 1.0;
+      const shn = fabric.defaults.sheen !== undefined ? fabric.defaults.sheen : 0.0;
+      const rgh = fabric.defaults.roughness !== undefined ? fabric.defaults.roughness : 0.7;
+      const mtl = fabric.defaults.metalness !== undefined ? fabric.defaults.metalness : 0.0;
+      const scl = fabric.defaults.scale !== undefined ? fabric.defaults.scale : 3.0;
+      const bmp = fabric.defaults.bump !== undefined ? fabric.defaults.bump : 1.0;
+
+      // Update UI Sliders to Preset Defaults
+      setBrightness(bright);
+      setSheen(shn);
+      setRoughness(rgh);
+      setMetalness(mtl);
+      setTexScale(scl);
+      setNormScale(bmp);
+
+      // Apply textures to scale
+      [diffTex, normTex, roughTex].forEach(t => { if (t) t.repeat.set(scl, scl); });
+
+      // Inject Textures into Meshes
+      setMeshEntries(prev => {
+        const next = [...prev];
+        next.forEach(entry => {
+          if (entry.checked) {
+            const mat = entry.greyMat;
+            mat.map = diffTex;
+            mat.normalMap = normTex;
+            mat.roughnessMap = roughTex;
+            
+            // Brightness Multiplier logic using material color tinting
+            mat.color.setRGB(bright, bright, bright);
+            mat.normalScale.set(bmp, bmp);
+            
+            const s = shn * 255;
+            mat.sheen = new THREE.Color(`rgb(${Math.floor(s)},${Math.floor(s)},${Math.floor(s)})`);
+            mat.roughness = rgh;
+            mat.metalness = mtl;
+            
+            mat.needsUpdate = true;
+          }
+        });
+        return next;
       });
-      return next;
-    });
+
+    } catch (e) {
+      console.error("Texture Load Exception:", e);
+      showToast("Error retrieving texture maps.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateBrightness = (val: number) => {
@@ -526,7 +655,7 @@ export default function App() {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        const baseColor = new THREE.Color(pbrTextures.map ? 0xffffff : activeHex);
+        const baseColor = new THREE.Color(pbrTextures.map ? 0xffffff : 0xffffff);
         baseColor.multiplyScalar(val);
         entry.greyMat.color.copy(baseColor);
         entry.greyMat.needsUpdate = true;
@@ -598,7 +727,6 @@ export default function App() {
     setSheen(defaultProperties.sheen);
     setTexScale(defaultProperties.texScale);
     setNormScale(defaultProperties.normScale);
-    setActiveHex(defaultProperties.activeHex);
     setBrightness(defaultProperties.brightness);
     
     setPbrTextures({ map: null, normalMap: null, roughnessMap: null });
@@ -616,7 +744,7 @@ export default function App() {
         entry.greyMat.normalMap = null;
         entry.greyMat.roughnessMap = null;
         
-        entry.greyMat.color.set(new THREE.Color(defaultProperties.activeHex)).multiplyScalar(defaultProperties.brightness);
+        entry.greyMat.color.setHex(0xffffff).multiplyScalar(defaultProperties.brightness);
         entry.greyMat.needsUpdate = true;
       });
       return next;
@@ -811,29 +939,29 @@ export default function App() {
             </div>
           </div>
 
-          {/* 3. Color Tint */}
+          {/* 3. Fabric Selection */}
           <div className="p-6">
-            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Color Tint</div>
-            <div className="grid grid-cols-3 gap-3 mb-6">
-              {palette.map(p => (
-                <div key={p.hex} className="flex flex-col items-center gap-2">
-                  <div 
-                    className={`w-full aspect-square cursor-pointer border-2 transition-transform ${activeHex === p.hex ? 'border-black scale-105 shadow-sm' : 'border-transparent hover:scale-105'}`}
-                    style={{ background: p.hex }}
-                    onClick={() => applyColorToChecked(p.hex)}
-                  />
-                  <span className="text-[10px] font-medium text-gray-500">{p.name}</span>
+            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Fabric Selection</div>
+            <div className="grid grid-cols-2 gap-3">
+              {fabricLibrary.map((fab, idx) => (
+                <div key={idx} className="flex flex-col items-center gap-2">
+                  <div
+                    className="w-full aspect-square cursor-pointer border-2 border-transparent hover:border-gray-300 transition-all bg-gray-50 flex items-center justify-center overflow-hidden"
+                    onClick={() => applyFabric(idx)}
+                  >
+                    {fabricThumbnails[idx] ? (
+                      <img 
+                        src={fabricThumbnails[idx]!} 
+                        alt={fab.name} 
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="text-[10px] text-gray-500 text-center px-2">{fab.name}</div>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center">{fab.name}</span>
                 </div>
               ))}
-            </div>
-            <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
-              <label className="text-xs font-medium text-gray-600 flex-1">Custom Color</label>
-              <input 
-                type="color" 
-                value={activeHex} 
-                onChange={(e) => applyColorToChecked(e.target.value)} 
-                className="w-10 h-8 border border-gray-200 rounded bg-white cursor-pointer p-0.5 shrink-0"
-              />
             </div>
           </div>
 
