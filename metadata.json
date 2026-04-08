@@ -1,0 +1,5 @@
+{
+  "name": "Asset Designer",
+  "description": "A 3D GLB viewer and Pro PBR engine for customizing materials, textures, and colors.",
+  "requestFramePermissions": []
+}
