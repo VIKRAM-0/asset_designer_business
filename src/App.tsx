@@ -32,7 +32,7 @@ const FABRIC_PRESETS = [
   {
     id: 'velvet',
     label: 'Velvet',
-    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Normal.jpg',
+    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Normal.webp',
     roughnessUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Roughness.jpg',
     roughness: 0.85,
     sheen: 0.6,
@@ -310,7 +310,7 @@ export default function App() {
       try {
         setLoading(true);
         setLoadingMsg("Loading Default Sofa...");
-        const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb?t=' + Date.now());
+        const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb');
         const arrayBuffer = await res.arrayBuffer();
         onGLBBuffer(arrayBuffer);
       } catch (e) {
@@ -527,21 +527,21 @@ export default function App() {
           const mat = entry.greyMat;
           if (diffTex) {
             const dt = diffTex.clone();
-            dt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            dt.repeat.set(texScale, texScale);
             dt.needsUpdate = true;
             mat.map = dt;
             mat.color.setRGB(brightness, brightness, brightness);
           }
           if (normTex) {
             const nt = normTex.clone();
-            nt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            nt.repeat.set(texScale, texScale);
             nt.needsUpdate = true;
             mat.normalMap = nt;
             mat.normalScale.set(normScale, normScale);
           }
           if (roughTex) {
             const rt = roughTex.clone();
-            rt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            rt.repeat.set(texScale, texScale);
             rt.needsUpdate = true;
             mat.roughnessMap = rt;
           }
@@ -798,7 +798,7 @@ export default function App() {
         next.forEach(entry => {
           if (entry.checked) {
             const clonedTex = texture.clone();
-            const finalScale = texScale * entry.uvScaleFactor;
+            const finalScale = texScale;
             clonedTex.repeat.set(finalScale, finalScale);
             clonedTex.needsUpdate = true;
             
@@ -879,14 +879,14 @@ export default function App() {
           const mat = entry.greyMat;
           if (normTex) {
             const nt = normTex.clone();
-            nt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            nt.repeat.set(texScale, texScale);
             nt.needsUpdate = true;
             mat.normalMap = nt;
             mat.normalScale.set(normScale, normScale);
           }
           if (roughTex) {
             const rt = roughTex.clone();
-            rt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            rt.repeat.set(texScale, texScale);
             rt.needsUpdate = true;
             mat.roughnessMap = rt;
           }
@@ -916,6 +916,10 @@ export default function App() {
       
       // Always use indexed assignment — mesh.material is always an array now
       const matArray = [...(newEntry.mesh.material as THREE.Material[])];
+      // BUG FIX 1: When checking, swap to greyMat as-is — DO NOT overwrite its
+      // textures. Each greyMat already holds whatever fabric was last applied to
+      // it via applyFabric/applyPolyFabric. Overwriting here was causing previously
+      // applied fabrics to be replaced by the global pbrTextures state.
       matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
       newEntry.mesh.material = matArray;
 
@@ -929,45 +933,6 @@ export default function App() {
           newEntry.greyMat.emissiveIntensity = 0;
           newEntry.greyMat.needsUpdate = true;
         }, 600);
-      }
-
-      if (checked) {
-        if (pbrTextures.map) {
-          const t = pbrTextures.map.clone();
-          t.repeat.set(texScale * newEntry.uvScaleFactor, texScale * newEntry.uvScaleFactor);
-          t.needsUpdate = true;
-          newEntry.greyMat.map = t;
-        } else {
-          newEntry.greyMat.map = newEntry.origGreyscaleMap;
-        }
-        
-        if (pbrTextures.normalMap) {
-          const t = pbrTextures.normalMap.clone();
-          t.repeat.set(texScale * newEntry.uvScaleFactor, texScale * newEntry.uvScaleFactor);
-          t.needsUpdate = true;
-          newEntry.greyMat.normalMap = t;
-          newEntry.greyMat.normalScale = new THREE.Vector2(normScale, normScale);
-        } else {
-          newEntry.greyMat.normalMap = null;
-        }
-        
-        if (pbrTextures.roughnessMap) {
-          const t = pbrTextures.roughnessMap.clone();
-          t.repeat.set(texScale * newEntry.uvScaleFactor, texScale * newEntry.uvScaleFactor);
-          t.needsUpdate = true;
-          newEntry.greyMat.roughnessMap = t;
-        } else {
-          newEntry.greyMat.roughnessMap = null;
-          newEntry.greyMat.roughness = roughness;
-        }
-
-        if (!pbrTextures.map) {
-           newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
-        } else {
-           newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
-        }
-        
-        newEntry.greyMat.needsUpdate = true;
       }
       
       return newEntry;
@@ -1094,7 +1059,7 @@ export default function App() {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        const finalScale = val * entry.uvScaleFactor;
+        const finalScale = val;
         if (entry.greyMat.map && entry.greyMat.map !== entry.origGreyscaleMap) {
            entry.greyMat.map.repeat.set(finalScale, finalScale);
         }
@@ -1142,7 +1107,7 @@ export default function App() {
     try {
       setLoading(true);
       setLoadingMsg('Reloading Default Sofa...');
-      const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb?t=' + Date.now());
+      const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb');
       const arrayBuffer = await res.arrayBuffer();
       onGLBBuffer(arrayBuffer);
     } catch (e) {
@@ -1412,7 +1377,7 @@ export default function App() {
           />
           <div className="flex flex-col leading-tight">
             <span className="text-lg font-bold text-white tracking-widest uppercase" style={{ letterSpacing: '0.18em' }}>LIVINIT</span>
-            <span className="text-[10px] font-medium text-gray-400 tracking-widest uppercase">Customiser</span>
+            <span className="text-[10px] font-medium text-gray-400 tracking-widest uppercase">AI Customiser</span>
           </div>
         </div>
         <div className="flex gap-3">
