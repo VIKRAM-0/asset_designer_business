@@ -183,6 +183,7 @@ export default function App() {
   const [polyFabrics, setPolyFabrics] = useState<PolyFabric[]>([]);
   const [polyLoading, setPolyLoading] = useState(false);
   const [selectedPolyFabric, setSelectedPolyFabric] = useState<string | null>(null);
+  const [fabricTab, setFabricTab] = useState<'custom' | 'polyhaven'>('custom');
 
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
@@ -353,7 +354,7 @@ export default function App() {
     loadThumbnails();
   }, []);
 
-  // Load Polyhaven fabric textures
+  // Load Polyhaven fabric textures — validate thumbnails before showing
   useEffect(() => {
     const fetchPolyFabrics = async () => {
       setPolyLoading(true);
@@ -362,14 +363,31 @@ export default function App() {
           headers: { 'User-Agent': 'FurnitureConfigurator/1.0' }
         });
         const data = await res.json();
-        const fabrics: PolyFabric[] = Object.entries(data).map(([id, info]: [string, any]) => ({
+        const candidates: PolyFabric[] = Object.entries(data).map(([id, info]: [string, any]) => ({
           id,
           name: info.name || id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
           thumb: `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=128&height=128`,
         }));
-        setPolyFabrics(fabrics);
+
+        // Validate thumbnails in parallel — only show fabrics whose image loads
+        const checkThumb = (url: string): Promise<boolean> =>
+          new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => resolve(true);
+            img.onerror = () => resolve(false);
+            img.src = url;
+          });
+
+        // Check in batches of 20 to avoid hammering CDN
+        const valid: PolyFabric[] = [];
+        for (let i = 0; i < candidates.length; i += 20) {
+          const batch = candidates.slice(i, i + 20);
+          const results = await Promise.all(batch.map(f => checkThumb(f.thumb)));
+          batch.forEach((f, j) => { if (results[j]) valid.push(f); });
+          setPolyFabrics([...valid]); // stream in as we validate
+        }
       } catch (e) {
-        console.warn('Polyhaven API unavailable, using local library');
+        console.warn('Polyhaven API unavailable');
       } finally {
         setPolyLoading(false);
       }
@@ -492,7 +510,13 @@ export default function App() {
         currentModel.traverse((child) => {
           if (!(child as THREE.Mesh).isMesh) return;
           const mesh = child as THREE.Mesh;
-          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+
+          // CRITICAL: Always normalize to a material array so each slot
+          // can be swapped independently without touching sibling entries.
+          if (!Array.isArray(mesh.material)) {
+            mesh.material = [mesh.material];
+          }
+          const materials = mesh.material as THREE.Material[];
 
           materials.forEach((origMat: any, index) => {
             const greyMat = new THREE.MeshPhysicalMaterial();
@@ -589,7 +613,7 @@ export default function App() {
               id: `mesh-${meshCounter}-${index}`,
               name: cleanName,
               mesh,
-              matIndex: Array.isArray(mesh.material) ? index : -1,
+              matIndex: index,
               origMat,
               greyMat,
               origGreyscaleMap, 
@@ -695,20 +719,21 @@ export default function App() {
 
   const applyBaseColor = (hex: string) => {
     setBaseColorHex(hex);
+    setLoading(true);
+    setLoadingMsg('Applying colour...');
     const color = new THREE.Color(hex);
     setMeshEntries(prev => {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        // Remove pattern map, apply flat color tinted by brightness
         entry.greyMat.map = null;
         entry.greyMat.color.copy(color).multiplyScalar(brightness);
         entry.greyMat.needsUpdate = true;
       });
       return next;
     });
-    // Clear map from pbrTextures so it doesn't override
     setPbrTextures(prev => ({ ...prev, map: null }));
+    setTimeout(() => setLoading(false), 200);
   };
 
   const applyFabricPreset = async (presetId: string) => {
@@ -787,15 +812,10 @@ export default function App() {
       
       const newEntry = { ...entry, checked };
       
-      if (newEntry.matIndex === -1) {
-        newEntry.mesh.material = checked ? newEntry.greyMat : newEntry.origMat;
-      } else {
-        const matArray = Array.isArray(newEntry.mesh.material) ? [...newEntry.mesh.material] : [];
-        if (matArray.length > 0) {
-          matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
-          newEntry.mesh.material = matArray;
-        }
-      }
+      // Always use indexed assignment — mesh.material is always an array now
+      const matArray = [...(newEntry.mesh.material as THREE.Material[])];
+      matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
+      newEntry.mesh.material = matArray;
 
       if (checked) {
         if (pbrTextures.map) {
@@ -1230,44 +1250,37 @@ export default function App() {
           </div>
 
 
-          {/* Fabric Selection — Polyhaven */}
+          {/* Fabric Selection — Tabbed: Custom | Polyhaven */}
           <div className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400">Fabric Library</div>
-              {polyLoading && <div className="w-3 h-3 border border-gray-300 border-t-black rounded-full animate-spin" />}
+            {/* Tab switcher */}
+            <div className="flex border border-gray-200 rounded overflow-hidden mb-4">
+              <button
+                onClick={() => setFabricTab('custom')}
+                className={`flex-1 py-2 text-[10px] font-bold tracking-widest uppercase transition-colors ${fabricTab === 'custom' ? 'bg-black text-white' : 'bg-white text-gray-400 hover:text-gray-700'}`}
+              >
+                Custom
+              </button>
+              <button
+                onClick={() => setFabricTab('polyhaven')}
+                className={`flex-1 py-2 text-[10px] font-bold tracking-widest uppercase transition-colors flex items-center justify-center gap-2 ${fabricTab === 'polyhaven' ? 'bg-black text-white' : 'bg-white text-gray-400 hover:text-gray-700'}`}
+              >
+                Polyhaven
+                {polyLoading && <div className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />}
+              </button>
             </div>
-            {polyFabrics.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3">
-                {polyFabrics.map((fab) => (
-                  <div key={fab.id} className="flex flex-col items-center gap-1.5">
-                    <div
-                      className={`w-full aspect-square cursor-pointer border-2 transition-all bg-gray-50 flex items-center justify-center overflow-hidden rounded ${selectedPolyFabric === fab.id ? 'border-black' : 'border-transparent hover:border-gray-300'}`}
-                      onClick={() => applyPolyFabric(fab)}
-                    >
-                      <img
-                        src={fab.thumb}
-                        alt={fab.name}
-                        className="w-full h-full object-cover"
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
-                    </div>
-                    <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center leading-tight">{fab.name}</span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              // Fallback: local library while loading or if API fails
+
+            {fabricTab === 'custom' && (
               <div className="grid grid-cols-2 gap-3">
                 {fabricLibrary.map((fab, idx) => (
                   <div key={idx} className="flex flex-col items-center gap-2">
                     <div
-                      className="w-full aspect-square cursor-pointer border-2 border-transparent hover:border-gray-300 transition-all bg-gray-50 flex items-center justify-center overflow-hidden"
+                      className="w-full aspect-square cursor-pointer border-2 border-transparent hover:border-gray-300 transition-all bg-gray-50 flex items-center justify-center overflow-hidden rounded"
                       onClick={() => applyFabric(idx)}
                     >
                       {fabricThumbnails[idx] ? (
                         <img src={fabricThumbnails[idx]!} alt={fab.name} className="w-full h-full object-cover" />
                       ) : (
-                        <div className="text-[10px] text-gray-500 text-center px-2">{fab.name}</div>
+                        <div className="text-[10px] text-gray-400 text-center px-2">{fab.name}</div>
                       )}
                     </div>
                     <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center">{fab.name}</span>
@@ -1275,7 +1288,35 @@ export default function App() {
                 ))}
               </div>
             )}
+
+            {fabricTab === 'polyhaven' && (
+              <>
+                {polyFabrics.length === 0 && polyLoading && (
+                  <div className="flex flex-col items-center justify-center py-10 gap-3 text-gray-400">
+                    <div className="w-5 h-5 border-2 border-gray-200 border-t-black rounded-full animate-spin" />
+                    <span className="text-[10px] uppercase tracking-widest">Loading fabrics...</span>
+                  </div>
+                )}
+                {polyFabrics.length === 0 && !polyLoading && (
+                  <div className="text-[10px] text-gray-400 text-center py-6">Polyhaven unavailable</div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  {polyFabrics.map((fab) => (
+                    <div key={fab.id} className="flex flex-col items-center gap-1.5">
+                      <div
+                        className={`w-full aspect-square cursor-pointer border-2 transition-all bg-gray-50 flex items-center justify-center overflow-hidden rounded ${selectedPolyFabric === fab.id ? 'border-black' : 'border-transparent hover:border-gray-300'}`}
+                        onClick={() => applyPolyFabric(fab)}
+                      >
+                        <img src={fab.thumb} alt={fab.name} className="w-full h-full object-cover" />
+                      </div>
+                      <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center leading-tight">{fab.name}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
+
 
 
         </div>
