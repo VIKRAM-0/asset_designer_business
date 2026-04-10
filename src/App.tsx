@@ -179,7 +179,8 @@ export default function App() {
   const [baseColorHex, setBaseColorHex] = useState('#ffffff');
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
-  type PolyFabric = { id: string; name: string; thumb: string };
+  type PolyFabricVariant = { key: string; label: string; diffUrl: string; thumb?: string };
+  type PolyFabric = { id: string; name: string; thumb: string; variants?: PolyFabricVariant[] };
   const [polyFabrics, setPolyFabrics] = useState<PolyFabric[]>([]);
   const [polyLoading, setPolyLoading] = useState(false);
   const [selectedPolyFabric, setSelectedPolyFabric] = useState<string | null>(null);
@@ -395,7 +396,80 @@ export default function App() {
     fetchPolyFabrics();
   }, []);
 
-  const applyPolyFabric = async (fabric: PolyFabric) => {
+  const [polyVariantModal, setPolyVariantModal] = useState<{ fabric: PolyFabric; files: any } | null>(null);
+
+  // Colour variant key names used by Polyhaven for multi-colour assets
+  const POLY_DIFF_KEYS = ['Diffuse', 'diff', 'Color', 'col1', 'col2', 'col3', 'coll1', 'coll2', 'coll3'];
+  const POLY_NORM_KEYS = ['nor_gl', 'Normal', 'nor_dx', 'nor', 'Nor_GL', 'NormalGL'];
+  const POLY_ROUGH_KEYS = ['Rough', 'rough', 'Roughness', 'roughness'];
+
+  const pickUrl = (files: any, keys: string[]): string | null => {
+    // Normalise all file keys to lowercase-no-space for comparison
+    const normalise = (s: string) => s.toLowerCase().replace(/[\s_-]/g, '');
+    const fileKeys = Object.keys(files);
+    for (const key of keys) {
+      // 1. Exact match first
+      if (files[key]) {
+        const mapData = files[key];
+        const url = mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url || null;
+        if (url) return url;
+      }
+      // 2. Case-insensitive + ignore spaces/underscores match
+      const normKey = normalise(key);
+      const matched = fileKeys.find(k => normalise(k) === normKey);
+      if (matched && files[matched]) {
+        const url = files[matched]?.['1k']?.jpg?.url || files[matched]?.['2k']?.jpg?.url || null;
+        if (url) return url;
+      }
+    }
+    return null;
+  };
+
+  // Returns all diffuse colour variant entries found in a files object
+  const getColourVariants = (files: any, fabricId: string): PolyFabricVariant[] => {
+    const variants: PolyFabricVariant[] = [];
+    const normalise = (s: string) => s.toLowerCase().replace(/[\s_-]/g, '');
+
+    // Patterns that indicate a colour/diffuse map (case-insensitive, space-tolerant)
+    const isDiffuseKey = (k: string): boolean => {
+      const n = normalise(k);
+      return (
+        n === 'diffuse' || n === 'diff' || n === 'color' || n === 'colour' ||
+        /^col\d+$/.test(n) ||    // col1, col2, col03 etc.
+        /^coll\d+$/.test(n)      // coll1, coll2 etc.
+      );
+    };
+
+    for (const key of Object.keys(files)) {
+      if (!isDiffuseKey(key)) continue;
+      const mapData = files[key];
+      const url = mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url;
+      if (!url) continue;
+
+      // Build a clean human label from the raw key
+      const n = normalise(key);
+      let label: string;
+      if (n === 'diffuse' || n === 'diff' || n === 'color' || n === 'colour') {
+        label = 'Default';
+      } else {
+        // Extract trailing digits: "col1"→"1", "coll03"→"03", "col 2"→"2"
+        const num = n.replace(/^coll?/, '');
+        label = `Colour ${parseInt(num, 10)}`; // parseInt strips leading zero: "03"→3
+      }
+      variants.push({ key, label, diffUrl: url });
+    }
+
+    // Sort by label so Default first, then Colour 1, 2, 3 ...
+    variants.sort((a, b) => {
+      if (a.label === 'Default') return -1;
+      if (b.label === 'Default') return 1;
+      return a.label.localeCompare(b.label, undefined, { numeric: true });
+    });
+
+    return variants;
+  };
+
+  const applyPolyFabric = async (fabric: PolyFabric, variantDiffUrl?: string) => {
     const hasChecked = meshEntries.some(e => e.checked);
     if (!hasChecked) { showToast('Select a part first!'); return; }
 
@@ -409,16 +483,21 @@ export default function App() {
       });
       const files = await filesRes.json();
 
-      // Pick 1k jpg for each map type
-      const pick = (mapKey: string): string | null => {
-        const mapData = files[mapKey];
-        if (!mapData) return null;
-        return mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url || Object.values(Object.values(mapData as any)[0] as any)[0]?.url || null;
-      };
+      // Detect colour variants
+      const variants = getColourVariants(files, fabric.id);
+      const hasVariants = variants.length > 1;
 
-      const diffUrl = pick('Diffuse') || pick('diff') || pick('Color');
-      const normUrl = pick('nor_gl') || pick('Normal') || pick('nor_dx');
-      const roughUrl = pick('Rough') || pick('rough') || pick('Roughness');
+      // If multi-variant and no specific variant chosen yet, show picker modal
+      if (hasVariants && !variantDiffUrl) {
+        setPolyVariantModal({ fabric, files });
+        setLoading(false);
+        return;
+      }
+
+      // Resolve diffuse URL: use chosen variant or first available
+      const diffUrl = variantDiffUrl || pickUrl(files, POLY_DIFF_KEYS);
+      const normUrl = pickUrl(files, POLY_NORM_KEYS);
+      const roughUrl = pickUrl(files, POLY_ROUGH_KEYS);
 
       const loadTex = (url: string, srgb: boolean): Promise<THREE.Texture> =>
         new Promise((resolve, reject) => {
@@ -438,6 +517,7 @@ export default function App() {
 
       setPbrTextures({ map: diffTex, normalMap: normTex, roughnessMap: roughTex });
       setSelectedPreset(null);
+      setPolyVariantModal(null);
 
       setMeshEntries(prev => {
         const next = [...prev];
@@ -1556,6 +1636,44 @@ export default function App() {
               >
                 <Download size={14} /> Download Image
               </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Polyhaven Colour Variant Picker Modal */}
+      {polyVariantModal && (
+        <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-6 backdrop-blur-sm">
+          <div className="bg-white rounded-lg shadow-2xl w-full max-w-md">
+            <div className="flex justify-between items-center px-5 py-4 border-b border-gray-100">
+              <div>
+                <h2 className="text-sm font-bold text-gray-900">{polyVariantModal.fabric.name}</h2>
+                <p className="text-[10px] text-gray-400 mt-0.5 uppercase tracking-wider">Choose a colour variant</p>
+              </div>
+              <button onClick={() => setPolyVariantModal(null)} className="text-gray-400 hover:text-black transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5">
+              <div className="grid grid-cols-3 gap-3">
+                {getColourVariants(polyVariantModal.files, polyVariantModal.fabric.id).map(variant => (
+                  <button
+                    key={variant.key}
+                    onClick={() => applyPolyFabric(polyVariantModal.fabric, variant.diffUrl)}
+                    className="flex flex-col items-center gap-2 group"
+                  >
+                    <div className="w-full aspect-square rounded border-2 border-transparent group-hover:border-black transition-all overflow-hidden bg-gray-100">
+                      <img
+                        src={variant.diffUrl}
+                        alt={variant.label}
+                        className="w-full h-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-medium text-gray-600 group-hover:text-black transition-colors">{variant.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         </div>
