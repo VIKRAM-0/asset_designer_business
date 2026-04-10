@@ -635,6 +635,7 @@ export default function App() {
   };
 
 
+  const toggleMeshCheck = (id: string, checked: boolean) => {
     setMeshEntries(prev => prev.map(entry => {
       if (entry.id !== id) return entry;
       
