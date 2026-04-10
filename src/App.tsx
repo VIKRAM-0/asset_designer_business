@@ -32,7 +32,7 @@ const FABRIC_PRESETS = [
   {
     id: 'velvet',
     label: 'Velvet',
-    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Normal.webp',
+    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Normal.jpg',
     roughnessUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Roughness.jpg',
     roughness: 0.85,
     sheen: 0.6,
