@@ -136,7 +136,8 @@ export default function App() {
     normalMap: THREE.Texture | null;
     roughnessMap: THREE.Texture | null;
   }>({ map: null, normalMap: null, roughnessMap: null });
-
+  
+  const [baseColor, setBaseColor] = useState('#ffffff');
   const [texScale, setTexScale] = useState(defaultProperties.texScale);
   const [normScale, setNormScale] = useState(defaultProperties.normScale);
   const [roughness, setRoughness] = useState(defaultProperties.roughness);
@@ -563,19 +564,85 @@ export default function App() {
           newEntry.greyMat.roughness = roughness;
         }
 
-        if (!pbrTextures.map) {
-           newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
-        } else {
-           newEntry.greyMat.color.setHex(0xffffff).multiplyScalar(brightness);
-        }
-        
-        newEntry.greyMat.needsUpdate = true;
-      }
+        newEntry.greyMat.color.set(baseColor).multiplyScalar(brightness);
       
       return newEntry;
     }));
   };
+  // 1. Handle Color Changes
+  const handleColorChange = (hex: string) => {
+    setBaseColor(hex);
+    setMeshEntries(prev => {
+      const next = [...prev];
+      next.forEach(entry => {
+        if (entry.checked) {
+          entry.greyMat.color.set(hex).multiplyScalar(brightness);
+          entry.greyMat.needsUpdate = true;
+        }
+      });
+      return next;
+    });
+  };
 
+  // 2. Handle Material Presets (Texture Only - keeps custom patterns intact!)
+  const applyMaterialPreset = async (presetName: string, folderName: string) => {
+    const hasChecked = meshEntries.some(e => e.checked);
+    if (!hasChecked) {
+      showToast("Select a part in the right panel first!");
+      return;
+    }
+
+    setLoading(true);
+    setLoadingMsg(`Applying ${presetName}...`);
+
+    try {
+      const folderUrl = `${BASE_URL}${folderName}`;
+      // Only fetch the bump and roughness maps
+      const [normRes, roughRes] = await Promise.all([
+        loadTextureWithFallbacks(folderUrl, 'Normal', false),
+        loadTextureWithFallbacks(folderUrl, 'Roughness', false)
+      ]);
+
+      const normTex = normRes.tex;
+      const roughTex = roughRes.tex;
+
+      setPbrTextures(prev => ({
+        ...prev,
+        // We DO NOT set map: null here, so the user's pattern stays!
+        normalMap: normTex,
+        roughnessMap: roughTex
+      }));
+
+      setMeshEntries(prev => {
+        const next = [...prev];
+        next.forEach(entry => {
+          if (entry.checked) {
+            const mat = entry.greyMat;
+            
+            // Apply the user's chosen baseColor (will tint the pattern if one exists)
+            mat.color.set(baseColor).multiplyScalar(brightness); 
+            
+            if (normTex) {
+              mat.normalMap = normTex.clone();
+              mat.normalMap.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+              mat.normalScale.set(normScale, normScale);
+            }
+            if (roughTex) {
+              mat.roughnessMap = roughTex.clone();
+              mat.roughnessMap.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            }
+            mat.needsUpdate = true;
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      console.error(e);
+      showToast("Failed to load preset textures");
+    } finally {
+      setLoading(false);
+    }
+  };
   // Apply Fabric with Smart Auto-Discovery
   const applyFabric = async (idx: number) => {
     const fabric = fabricLibrary[idx];
@@ -653,15 +720,16 @@ export default function App() {
     }
   };
 
-  const updateBrightness = (val: number) => {
+const updateBrightness = (val: number) => {
     setBrightness(val);
     setMeshEntries(prev => {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        const baseColor = new THREE.Color(pbrTextures.map ? 0xffffff : 0xffffff);
-        baseColor.multiplyScalar(val);
-        entry.greyMat.color.copy(baseColor);
+        // UPDATE: Multiply the custom user color instead of pure white
+        const colorObj = new THREE.Color(baseColor);
+        colorObj.multiplyScalar(val);
+        entry.greyMat.color.copy(colorObj);
         entry.greyMat.needsUpdate = true;
       });
       return next;
@@ -880,68 +948,88 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         
         {/* Left Panel: Fabric & Color */}
+        {/* Left Panel: Fabric & Color */}
         <div className="w-80 border-r border-gray-200 flex flex-col overflow-y-auto shrink-0 bg-white z-30">
           
-          {/* 2. PBR Textures */}
+          {/* 1. Base Color & Material Presets */}
           <div className="p-6 border-b border-gray-100">
-            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Fabric Library</div>
+            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">1. Material Style</div>
             
-            <div className="space-y-4 mb-6">
-              <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Base Color (Diffuse)</span>
-                  <div className="relative group flex items-center">
-                    <Info size={12} className="text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      The main color or pattern of the fabric. It defines how the material looks under neutral light.
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-                    </div>
-                  </div>
+            {/* Color & Pattern Picker */}
+            <div className="mb-6">
+              <label className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider mb-2">Base Color & Pattern</label>
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <input 
+                    type="color" 
+                    value={baseColor} 
+                    onChange={(e) => handleColorChange(e.target.value)} 
+                    className="w-10 h-10 rounded cursor-pointer border border-gray-200 p-0" 
+                  />
+                  <span className="text-xs text-gray-600 font-medium tracking-wider">{baseColor.toUpperCase()}</span>
                 </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.map ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
-                  Upload Image
-                  {pbrTextures.map && <span className="text-black text-[10px]">Loaded ✔</span>}
+                
+                {/* Pattern Upload */}
+                <label className={`flex justify-between items-center w-full px-4 py-2 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.map ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                  {pbrTextures.map ? 'Pattern Uploaded ✔' : 'Upload Pattern Image'}
                   <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'map')} />
                 </label>
               </div>
+            </div>
 
+            {/* Material Presets */}
+            <div>
+              <label className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider mb-2">Texture Preset</label>
+              <div className="grid grid-cols-3 gap-2">
+                <button 
+                  onClick={() => applyMaterialPreset('Cotton', 'cotton_fabric')}
+                  className="py-2 px-1 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded hover:border-black transition-colors"
+                >
+                  Cotton
+                </button>
+                <button 
+                  onClick={() => applyMaterialPreset('Leather', 'leather_fabric')}
+                  className="py-2 px-1 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded hover:border-black transition-colors"
+                >
+                  Leather
+                </button>
+                <button 
+                  onClick={() => applyMaterialPreset('Velvet', 'velvet_fabric')}
+                  className="py-2 px-1 text-xs font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded hover:border-black transition-colors"
+                >
+                  Velvet
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* 2. Custom Overrides */}
+          <div className="p-6">
+            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">2. Advanced Overrides</div>
+            <p className="text-xs text-gray-500 mb-4">Have your own PBR texture maps? Upload them here.</p>
+            
+            <div className="space-y-4">
               <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Normal Map (GL)</span>
-                  <div className="relative group flex items-center">
-                    <Info size={12} className="text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      Adds physical bumps, wrinkles, and texture depth without changing the 3D shape.
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-                    </div>
-                  </div>
-                </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.normalMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider mb-1.5">Custom Normal Map</span>
+                <label className={`flex justify-between items-center w-full px-4 py-2 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.normalMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
                   Upload Image
-                  {pbrTextures.normalMap && <span className="text-black text-[10px]">Loaded ✔</span>}
+                  {pbrTextures.normalMap && <span className="text-black text-[10px]">✔</span>}
                   <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'normalMap')} />
                 </label>
               </div>
 
               <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Roughness Map</span>
-                  <div className="relative group flex items-center">
-                    <Info size={12} className="text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      Controls how shiny or matte different parts of the fabric are. White is matte, black is shiny.
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-                    </div>
-                  </div>
-                </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.roughnessMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
+                <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider mb-1.5">Custom Roughness Map</span>
+                <label className={`flex justify-between items-center w-full px-4 py-2 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.roughnessMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
                   Upload Image
-                  {pbrTextures.roughnessMap && <span className="text-black text-[10px]">Loaded ✔</span>}
+                  {pbrTextures.roughnessMap && <span className="text-black text-[10px]">✔</span>}
                   <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'roughnessMap')} />
                 </label>
               </div>
             </div>
           </div>
+
+        </div>
 
           {/* 3. Fabric Selection */}
           <div className="p-6">
