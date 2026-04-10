@@ -1531,13 +1531,13 @@ export default function App() {
                 onClick={() => setFabricTab('custom')}
                 className={`flex-1 py-2 text-[10px] font-bold tracking-widest uppercase transition-colors ${fabricTab === 'custom' ? 'bg-black text-white' : 'bg-white text-gray-400 hover:text-gray-700'}`}
               >
-                Custom
+                Custom Fabrics
               </button>
               <button
                 onClick={() => setFabricTab('polyhaven')}
                 className={`flex-1 py-2 text-[10px] font-bold tracking-widest uppercase transition-colors flex items-center justify-center gap-2 ${fabricTab === 'polyhaven' ? 'bg-black text-white' : 'bg-white text-gray-400 hover:text-gray-700'}`}
               >
-                Polyhaven
+                Fabrics
                 {polyLoading && <div className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />}
               </button>
             </div>
