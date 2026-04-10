@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Download, RotateCcw, UploadCloud, Info, Camera, X } from 'lucide-react';
 
 // FAST GPU-Accelerated Greyscale
@@ -182,21 +183,24 @@ export default function App() {
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.physicallyCorrectLights = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
+// 1. Match the exact exposure from the business side
+    renderer.toneMappingExposure = 1.2; 
     viewerRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     const scene = sceneRef.current;
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    const keyLight = new THREE.DirectionalLight(0xfff8f0, 1.6);
-    const fillLight = new THREE.DirectionalLight(0xd0e8ff, 0.5);
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.35);
-    const overheadLight = new THREE.DirectionalLight(0xffffff, 0.25);
-    keyLight.position.set(3, 5, 4);
-    fillLight.position.set(-4, 2, -3);
-    rimLight.position.set(0, -3, -4);
-    overheadLight.position.set(0, 6, 0);
-    scene.add(ambientLight, keyLight, fillLight, rimLight, overheadLight);
+    
+    // 2. Add the Room Environment for photorealistic PBR reflections
+    const pmremGenerator = new THREE.PMREMGenerator(renderer);
+    pmremGenerator.compileEquirectangularShader();
+    scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    // 3. Match the exact simple lighting from the business side
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    const dirLight = new THREE.DirectionalLight(0xfff8f0, 2.5);
+    dirLight.position.set(3, 5, 4);
+    
+    scene.add(ambientLight, dirLight);
 
     camUpdate();
 
