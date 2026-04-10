@@ -515,16 +515,6 @@ export default function App() {
           // can be swapped independently without touching sibling entries.
           if (!Array.isArray(mesh.material)) {
             mesh.material = [mesh.material];
-            // ADD THIS: If we convert to an array material, we MUST ensure there is a geometry group
-            // covering the entire mesh. Otherwise, Three.js will render nothing.
-            if (mesh.geometry.groups.length === 0) {
-              const count = mesh.geometry.index 
-                ? mesh.geometry.index.count 
-                : mesh.geometry.attributes.position.count;
-              
-              // addGroup(start, count, materialIndex)
-              mesh.geometry.addGroup(0, count, 0); 
-            }
           }
           const materials = mesh.material as THREE.Material[];
 
@@ -560,62 +550,72 @@ export default function App() {
             // Don't set default color - fabrics will handle this
             greyMat.needsUpdate = true;
 
-            let rawName = origMat.name || mesh.name || '';
-            let cleanName = '';
-            const nl = rawName.toLowerCase();
+            // ── SPATIAL NAMING ─────────────────────────────────────────
+            // Scraped GLBs have no useful names. Ignore them entirely and 
+            // rely on world-space bounding-box geometry analysis.
             
-            // Step 1: keyword matching on material/mesh name
-            if (nl.includes('stitch') || nl.includes('seam') || nl.includes('welt') || nl.includes('piping') || nl.includes('trim')) cleanName = 'Stitching';
-            else if (nl.includes('button') || nl.includes('tufting')) cleanName = 'Tufting / Buttons';
-            else if (nl.includes('cushion') || nl.includes('seat')) cleanName = 'Seat Cushion';
-            else if (nl.includes('pillow')) cleanName = 'Backrest Pillow';
-            else if (nl.includes('leg') || nl.includes('foot') || nl.includes('feet') || nl.includes('base')) cleanName = 'Legs / Base';
-            else if (nl.includes('leftarm') || nl.includes('left_arm') || nl.includes('armleft')) cleanName = 'Left Armrest';
-            else if (nl.includes('rightarm') || nl.includes('right_arm') || nl.includes('armright')) cleanName = 'Right Armrest';
-            else if (nl.includes('arm') || nl.includes('armrest')) cleanName = 'Armrests';
-            else if (nl.includes('back') || nl.includes('backrest')) cleanName = 'Backrest';
-            else if (nl.includes('wood')) cleanName = 'Wood Frame';
-            else if (nl.includes('metal') || nl.includes('chrome')) cleanName = 'Metal Parts';
-            else if (nl.includes('fabric') || nl.includes('cloth') || nl.includes('upholster')) cleanName = 'Upholstery';
-            else if (nl.includes('frame') || nl.includes('body') || nl.includes('sofa') || nl.includes('couch')) cleanName = 'Main Body';
-            else {
-                // Step 2: spatial fallback using bounding box position
-                const meshBox = new THREE.Box3().setFromObject(mesh);
-                const meshCenter = meshBox.getCenter(new THREE.Vector3());
-                const meshSize = meshBox.getSize(new THREE.Vector3());
-                
-                const isGarbage = rawName.length > 20 && (rawName.includes('-') || /[0-9a-f]{8}/i.test(rawName));
-                
-                if (isGarbage || !rawName || rawName.length < 2) {
-                    // Pure spatial naming
-                    const relY = (meshCenter.y - worldCenter.y) / worldSize.y;
-                    const relX = Math.abs(meshCenter.x - worldCenter.x) / worldSize.x;
-                    const relZ = (meshCenter.z - worldCenter.z) / worldSize.z;
-                    const volRatio = (meshSize.x * meshSize.y * meshSize.z) / (worldSize.x * worldSize.y * worldSize.z);
-
-                    if (relY < -0.25) cleanName = 'Legs / Base';
-                    else if (relZ < -0.25) cleanName = 'Backrest';
-                    else if (relX > 0.28) {
-                        const side = meshCenter.x > worldCenter.x ? 'Right' : 'Left';
-                        cleanName = `${side} Armrest`;
-                    }
-                    else if (relY > 0.1 && relZ > -0.1 && relZ < 0.3) cleanName = 'Seat Cushion';
-                    else if (volRatio < 0.005) cleanName = 'Stitching';
-                    else if (volRatio > 0.15) cleanName = 'Main Body';
-                    else cleanName = 'Upholstery Panel';
-                } else {
-                    cleanName = rawName.replace(/[-_]/g, ' ').replace(/([A-Z])/g, ' $1').trim();
-                    cleanName = cleanName.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-                    cleanName = cleanName.replace(/\s+/g, ' ').replace(/\.gltf|\.glb|\.obj/gi, '').trim();
-                    if (!cleanName || cleanName.length < 2) cleanName = 'Part';
-                }
-            }
-
             mesh.geometry.computeBoundingBox();
-            const size = new THREE.Vector3();
-            if (mesh.geometry.boundingBox) {
-                mesh.geometry.boundingBox.getSize(size);
+            const meshBox3 = new THREE.Box3().setFromObject(mesh);
+            const mc  = meshBox3.getCenter(new THREE.Vector3());   // mesh center (world)
+            const ms  = meshBox3.getSize(new THREE.Vector3());      // mesh size  (world)
+            const wc  = worldCenter;
+            const ws  = worldSize;
+
+            // Normalised relative positions  (-1 … +1 range)
+            const relY = (mc.y - wc.y) / (ws.y * 0.5);   // -1 = very bottom, +1 = very top
+            const relZ = (mc.z - wc.z) / (ws.z * 0.5);   // -1 = very back,   +1 = very front
+            const relX = (mc.x - wc.x) / (ws.x * 0.5);   // -1 = far left,    +1 = far right
+            const absX = Math.abs(relX);
+
+            // Volume ratio vs entire model bounding volume
+            const meshVol  = ms.x * ms.y * ms.z;
+            const worldVol = ws.x * ws.y * ws.z;
+            const volRatio = worldVol > 0 ? meshVol / worldVol : 0;
+
+            // Flatness: a very flat mesh (e.g. thin seam / stitching line) has
+            // one dimension much smaller than the other two.
+            const dims    = [ms.x, ms.y, ms.z].sort((a, b) => a - b);
+            const flatness = dims[2] > 0 ? dims[0] / dims[2] : 1; // 0 = very flat, 1 = cube
+
+            let cleanName = '';
+
+            // 1. Legs / base  — low Y, typically small volume, roughly symmetric
+            if (relY < -0.55) {
+              cleanName = 'Legs / Base';
+
+            // 2. Backrest — high Z (rear), upper half of model
+            } else if (relZ < -0.35 && relY > -0.3) {
+              cleanName = 'Backrest';
+
+            // 3. Armrests — far left or right, mid height
+            } else if (absX > 0.55 && relY > -0.4) {
+              cleanName = relX > 0 ? 'Right Armrest' : 'Left Armrest';
+
+            // 4. Seat cushion — front-centre, middle height
+            } else if (relZ > 0.0 && relY > -0.3 && relY < 0.4 && absX < 0.5) {
+              cleanName = 'Seat Cushion';
+
+            // 5. Stitching / seam — very flat or very small volume
+            } else if (flatness < 0.06 || volRatio < 0.0008) {
+              cleanName = 'Stitching';
+
+            // 6. Legs ambiguous — low Y but not caught above
+            } else if (relY < -0.35 && volRatio < 0.02) {
+              cleanName = 'Legs / Base';
+
+            // 7. Large central body
+            } else if (volRatio > 0.12) {
+              cleanName = 'Main Body';
+
+            // 8. Mid-body panels
+            } else if (relY > -0.1 && relY < 0.55 && absX < 0.55) {
+              cleanName = 'Body Panel';
+
+            } else {
+              cleanName = 'Frame';
             }
+
+            const size = ms;
             const maxDim = Math.max(size.x, size.y, size.z);
             const uvScaleFactor = maxDim > 0 ? maxDim : 1;
 
@@ -826,6 +826,18 @@ export default function App() {
       const matArray = [...(newEntry.mesh.material as THREE.Material[])];
       matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
       newEntry.mesh.material = matArray;
+
+      // Flash emissive highlight so user can see exactly which part got selected
+      if (checked) {
+        newEntry.greyMat.emissive = new THREE.Color(0x888800);
+        newEntry.greyMat.emissiveIntensity = 0.4;
+        newEntry.greyMat.needsUpdate = true;
+        setTimeout(() => {
+          newEntry.greyMat.emissive = new THREE.Color(0x000000);
+          newEntry.greyMat.emissiveIntensity = 0;
+          newEntry.greyMat.needsUpdate = true;
+        }, 600);
+      }
 
       if (checked) {
         if (pbrTextures.map) {
@@ -1382,21 +1394,90 @@ export default function App() {
           
           {/* 1. Select Parts */}
           <div className="p-6 border-b border-gray-100 flex-1">
-            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">1. Select Parts</div>
-            <div className="flex flex-col gap-2">
-              {!hasModel && <div className="text-xs text-gray-400 italic">Load a GLB first</div>}
-              {meshEntries.map(entry => (
-                <label key={entry.id} className={`flex items-center gap-3 px-4 py-3 border rounded cursor-pointer transition-colors ${entry.checked ? 'border-black bg-gray-50' : 'border-gray-200 hover:border-gray-300'}`}>
-                  <input 
-                    type="checkbox" 
-                    checked={entry.checked} 
-                    onChange={(e) => toggleMeshCheck(entry.id, e.target.checked)}
-                    className="w-4 h-4 accent-black cursor-pointer"
-                  />
-                  <span className={`text-sm font-medium ${entry.checked ? 'text-black' : 'text-gray-600'}`}>{entry.name}</span>
-                </label>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400">1. Select Parts</div>
+              {meshEntries.length > 0 && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => meshEntries.forEach(e => { if (!e.checked) toggleMeshCheck(e.id, true); })}
+                    className="text-[10px] text-gray-400 hover:text-black transition-colors font-semibold uppercase tracking-wider"
+                  >All</button>
+                  <span className="text-gray-200">|</span>
+                  <button
+                    onClick={() => meshEntries.forEach(e => { if (e.checked) toggleMeshCheck(e.id, false); })}
+                    className="text-[10px] text-gray-400 hover:text-black transition-colors font-semibold uppercase tracking-wider"
+                  >None</button>
+                </div>
+              )}
             </div>
+            {!hasModel && <div className="text-xs text-gray-400 italic">Load a GLB first</div>}
+            <div className="flex flex-col gap-1.5">
+              {meshEntries.map(entry => {
+                // Zone colour dot — gives instant visual cue about which region
+                const zoneColor: Record<string, string> = {
+                  'Seat Cushion':    '#a78bfa',
+                  'Backrest':        '#60a5fa',
+                  'Left Armrest':    '#34d399',
+                  'Right Armrest':   '#34d399',
+                  'Legs / Base':     '#f87171',
+                  'Main Body':       '#fbbf24',
+                  'Body Panel':      '#fbbf24',
+                  'Stitching':       '#94a3b8',
+                  'Frame':           '#f97316',
+                };
+                // strip trailing number for lookup
+                const baseName = entry.name.replace(/ \d+$/, '');
+                const dot = zoneColor[baseName] || '#cbd5e1';
+
+                return (
+                  <label
+                    key={entry.id}
+                    className={`flex items-center gap-3 px-3 py-2.5 border rounded cursor-pointer transition-all select-none ${entry.checked ? 'border-black bg-gray-50 shadow-sm' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'}`}
+                    onMouseEnter={() => {
+                      // Brief emissive pulse on hover so user can preview which part in 3D
+                      entry.greyMat.emissive = new THREE.Color(0x444400);
+                      entry.greyMat.emissiveIntensity = 0.25;
+                      entry.greyMat.needsUpdate = true;
+                      // Also pulse the original material if not checked
+                      if (!entry.checked) {
+                        const origAny = entry.origMat as any;
+                        if (origAny.emissive !== undefined) {
+                          origAny._prevEmissive = origAny.emissive.clone();
+                          origAny.emissive = new THREE.Color(0x444400);
+                          origAny.emissiveIntensity = 0.25;
+                          origAny.needsUpdate = true;
+                        }
+                      }
+                    }}
+                    onMouseLeave={() => {
+                      entry.greyMat.emissive = new THREE.Color(0x000000);
+                      entry.greyMat.emissiveIntensity = 0;
+                      entry.greyMat.needsUpdate = true;
+                      if (!entry.checked) {
+                        const origAny = entry.origMat as any;
+                        if (origAny._prevEmissive !== undefined) {
+                          origAny.emissive = origAny._prevEmissive;
+                          origAny.emissiveIntensity = 0;
+                          origAny.needsUpdate = true;
+                        }
+                      }
+                    }}
+                  >
+                    <input 
+                      type="checkbox" 
+                      checked={entry.checked} 
+                      onChange={(e) => toggleMeshCheck(entry.id, e.target.checked)}
+                      className="w-4 h-4 accent-black cursor-pointer flex-shrink-0"
+                    />
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: dot }} />
+                    <span className={`text-xs font-medium leading-tight ${entry.checked ? 'text-black' : 'text-gray-600'}`}>{entry.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            {meshEntries.length > 0 && (
+              <p className="text-[10px] text-gray-400 mt-3 leading-relaxed">Hover a part to highlight it in the 3D view. Check to select, then apply fabric or colour.</p>
+            )}
           </div>
 
           <div className="p-6 bg-gray-50/50">
