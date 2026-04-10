@@ -515,6 +515,16 @@ export default function App() {
           // can be swapped independently without touching sibling entries.
           if (!Array.isArray(mesh.material)) {
             mesh.material = [mesh.material];
+            // ADD THIS: If we convert to an array material, we MUST ensure there is a geometry group
+            // covering the entire mesh. Otherwise, Three.js will render nothing.
+            if (mesh.geometry.groups.length === 0) {
+              const count = mesh.geometry.index 
+                ? mesh.geometry.index.count 
+                : mesh.geometry.attributes.position.count;
+              
+              // addGroup(start, count, materialIndex)
+              mesh.geometry.addGroup(0, count, 0); 
+            }
           }
           const materials = mesh.material as THREE.Material[];
 
