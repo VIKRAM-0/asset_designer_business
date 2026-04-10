@@ -28,7 +28,16 @@ export default async function handler(req: any, res: any) {
             },
           },
           {
-            text: 'Place this object in a modern, well-lit living room. Maintain the object\'s exact appearance and perspective. High quality, photorealistic, 4k.',
+            text: `You are a professional interior design renderer. Place this furniture piece as the clear focal point in a beautifully staged, modern living room.
+
+Rules you must follow:
+- The furniture must face the camera directly — never face away from the viewer
+- The furniture is the hero of the image — centred, well-lit, and dominant in the frame
+- The living room is staged around the furniture: a rug beneath it, soft ambient lighting from above and the sides, a tasteful background with walls, artwork, and plants
+- NO television, screens, or media units in the scene — this is a showroom-style render
+- The camera angle is a slight 3/4 front view at eye level, as if a customer is viewing it in a showroom
+- Preserve the furniture's exact fabric texture, colour, pattern, and material from the input image — do not change or improve it
+- Photorealistic, 8K quality, soft natural lighting`,
           },
         ],
       },
