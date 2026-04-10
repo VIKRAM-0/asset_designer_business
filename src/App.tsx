@@ -310,7 +310,7 @@ export default function App() {
       try {
         setLoading(true);
         setLoadingMsg("Loading Default Sofa...");
-        const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb');
+        const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb?t=' + Date.now());
         const arrayBuffer = await res.arrayBuffer();
         onGLBBuffer(arrayBuffer);
       } catch (e) {
@@ -1107,7 +1107,7 @@ export default function App() {
     try {
       setLoading(true);
       setLoadingMsg('Reloading Default Sofa...');
-      const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb');
+      const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb?t=' + Date.now());
       const arrayBuffer = await res.arrayBuffer();
       onGLBBuffer(arrayBuffer);
     } catch (e) {
