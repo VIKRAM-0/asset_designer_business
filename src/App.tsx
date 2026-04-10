@@ -179,6 +179,11 @@ export default function App() {
   const [baseColorHex, setBaseColorHex] = useState('#ffffff');
   const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
+  type PolyFabric = { id: string; name: string; thumb: string };
+  const [polyFabrics, setPolyFabrics] = useState<PolyFabric[]>([]);
+  const [polyLoading, setPolyLoading] = useState(false);
+  const [selectedPolyFabric, setSelectedPolyFabric] = useState<string | null>(null);
+
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
   const cameraRef = useRef(new THREE.PerspectiveCamera(42, 1, 0.01, 1000));
@@ -348,6 +353,114 @@ export default function App() {
     loadThumbnails();
   }, []);
 
+  // Load Polyhaven fabric textures
+  useEffect(() => {
+    const fetchPolyFabrics = async () => {
+      setPolyLoading(true);
+      try {
+        const res = await fetch('https://api.polyhaven.com/assets?t=textures&c=fabric', {
+          headers: { 'User-Agent': 'FurnitureConfigurator/1.0' }
+        });
+        const data = await res.json();
+        const fabrics: PolyFabric[] = Object.entries(data).map(([id, info]: [string, any]) => ({
+          id,
+          name: info.name || id.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase()),
+          thumb: `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=128&height=128`,
+        }));
+        setPolyFabrics(fabrics);
+      } catch (e) {
+        console.warn('Polyhaven API unavailable, using local library');
+      } finally {
+        setPolyLoading(false);
+      }
+    };
+    fetchPolyFabrics();
+  }, []);
+
+  const applyPolyFabric = async (fabric: PolyFabric) => {
+    const hasChecked = meshEntries.some(e => e.checked);
+    if (!hasChecked) { showToast('Select a part first!'); return; }
+
+    setSelectedPolyFabric(fabric.id);
+    setLoading(true);
+    setLoadingMsg('Loading Polyhaven textures...');
+
+    try {
+      const filesRes = await fetch(`https://api.polyhaven.com/files/${fabric.id}`, {
+        headers: { 'User-Agent': 'FurnitureConfigurator/1.0' }
+      });
+      const files = await filesRes.json();
+
+      // Pick 1k jpg for each map type
+      const pick = (mapKey: string): string | null => {
+        const mapData = files[mapKey];
+        if (!mapData) return null;
+        return mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url || Object.values(Object.values(mapData as any)[0] as any)[0]?.url || null;
+      };
+
+      const diffUrl = pick('Diffuse') || pick('diff') || pick('Color');
+      const normUrl = pick('nor_gl') || pick('Normal') || pick('nor_dx');
+      const roughUrl = pick('Rough') || pick('rough') || pick('Roughness');
+
+      const loadTex = (url: string, srgb: boolean): Promise<THREE.Texture> =>
+        new Promise((resolve, reject) => {
+          new THREE.TextureLoader().load(url, (t) => {
+            t.wrapS = t.wrapT = THREE.RepeatWrapping;
+            t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+            t.flipY = false;
+            resolve(t);
+          }, undefined, reject);
+        });
+
+      const [diffTex, normTex, roughTex] = await Promise.all([
+        diffUrl ? loadTex(diffUrl, true).catch(() => null) : Promise.resolve(null),
+        normUrl ? loadTex(normUrl, false).catch(() => null) : Promise.resolve(null),
+        roughUrl ? loadTex(roughUrl, false).catch(() => null) : Promise.resolve(null),
+      ]);
+
+      setPbrTextures({ map: diffTex, normalMap: normTex, roughnessMap: roughTex });
+      setSelectedPreset(null);
+
+      setMeshEntries(prev => {
+        const next = [...prev];
+        next.forEach(entry => {
+          if (!entry.checked) return;
+          const mat = entry.greyMat;
+          if (diffTex) {
+            const dt = diffTex.clone();
+            dt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            dt.needsUpdate = true;
+            mat.map = dt;
+            mat.color.setRGB(brightness, brightness, brightness);
+          }
+          if (normTex) {
+            const nt = normTex.clone();
+            nt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            nt.needsUpdate = true;
+            mat.normalMap = nt;
+            mat.normalScale.set(normScale, normScale);
+          }
+          if (roughTex) {
+            const rt = roughTex.clone();
+            rt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            rt.needsUpdate = true;
+            mat.roughnessMap = rt;
+          }
+          mat.needsUpdate = true;
+        });
+        return next;
+      });
+
+      showToast(`${fabric.name} applied!`);
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to load Polyhaven texture');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
   const onGLBBuffer = (arrayBuffer: ArrayBuffer) => {
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
@@ -417,29 +530,50 @@ export default function App() {
             let cleanName = '';
             const nl = rawName.toLowerCase();
             
-            if (nl.includes('cushion') || nl.includes('seat')) cleanName = 'Seat Cushion';
-            else if (nl.includes('leg') || nl.includes('foot') || nl.includes('base')) cleanName = 'Legs / Base';
-            else if (nl.includes('arm')) cleanName = 'Armrest';
-            else if (nl.includes('back')) cleanName = 'Backrest';
-            else if (nl.includes('wood')) cleanName = 'Wood Parts';
-            else if (nl.includes('metal')) cleanName = 'Metal Parts';
-            else if (nl.includes('pillow')) cleanName = 'Pillows';
-            else if (nl.includes('fabric')) cleanName = 'Fabric';
+            // Step 1: keyword matching on material/mesh name
+            if (nl.includes('stitch') || nl.includes('seam') || nl.includes('welt') || nl.includes('piping') || nl.includes('trim')) cleanName = 'Stitching';
+            else if (nl.includes('button') || nl.includes('tufting')) cleanName = 'Tufting / Buttons';
+            else if (nl.includes('cushion') || nl.includes('seat')) cleanName = 'Seat Cushion';
+            else if (nl.includes('pillow')) cleanName = 'Backrest Pillow';
+            else if (nl.includes('leg') || nl.includes('foot') || nl.includes('feet') || nl.includes('base')) cleanName = 'Legs / Base';
+            else if (nl.includes('leftarm') || nl.includes('left_arm') || nl.includes('armleft')) cleanName = 'Left Armrest';
+            else if (nl.includes('rightarm') || nl.includes('right_arm') || nl.includes('armright')) cleanName = 'Right Armrest';
+            else if (nl.includes('arm') || nl.includes('armrest')) cleanName = 'Armrests';
+            else if (nl.includes('back') || nl.includes('backrest')) cleanName = 'Backrest';
+            else if (nl.includes('wood')) cleanName = 'Wood Frame';
+            else if (nl.includes('metal') || nl.includes('chrome')) cleanName = 'Metal Parts';
+            else if (nl.includes('fabric') || nl.includes('cloth') || nl.includes('upholster')) cleanName = 'Upholstery';
+            else if (nl.includes('frame') || nl.includes('body') || nl.includes('sofa') || nl.includes('couch')) cleanName = 'Main Body';
             else {
+                // Step 2: spatial fallback using bounding box position
+                const meshBox = new THREE.Box3().setFromObject(mesh);
+                const meshCenter = meshBox.getCenter(new THREE.Vector3());
+                const meshSize = meshBox.getSize(new THREE.Vector3());
+                
                 const isGarbage = rawName.length > 20 && (rawName.includes('-') || /[0-9a-f]{8}/i.test(rawName));
-                if (isGarbage || !rawName) {
-                    const meshBox = new THREE.Box3().setFromObject(mesh);
-                    const meshCenter = meshBox.getCenter(new THREE.Vector3());
-                    
-                    if (meshCenter.y < worldCenter.y - worldSize.y * 0.25) cleanName = 'Legs / Base';
-                    else if (meshCenter.z < worldCenter.z - worldSize.z * 0.2) cleanName = 'Backrest';
-                    else if (Math.abs(meshCenter.x - worldCenter.x) > worldSize.x * 0.3) cleanName = 'Armrests';
-                    else cleanName = `Body Part ${meshCounter + 1}`;
+                
+                if (isGarbage || !rawName || rawName.length < 2) {
+                    // Pure spatial naming
+                    const relY = (meshCenter.y - worldCenter.y) / worldSize.y;
+                    const relX = Math.abs(meshCenter.x - worldCenter.x) / worldSize.x;
+                    const relZ = (meshCenter.z - worldCenter.z) / worldSize.z;
+                    const volRatio = (meshSize.x * meshSize.y * meshSize.z) / (worldSize.x * worldSize.y * worldSize.z);
+
+                    if (relY < -0.25) cleanName = 'Legs / Base';
+                    else if (relZ < -0.25) cleanName = 'Backrest';
+                    else if (relX > 0.28) {
+                        const side = meshCenter.x > worldCenter.x ? 'Right' : 'Left';
+                        cleanName = `${side} Armrest`;
+                    }
+                    else if (relY > 0.1 && relZ > -0.1 && relZ < 0.3) cleanName = 'Seat Cushion';
+                    else if (volRatio < 0.005) cleanName = 'Stitching';
+                    else if (volRatio > 0.15) cleanName = 'Main Body';
+                    else cleanName = 'Upholstery Panel';
                 } else {
                     cleanName = rawName.replace(/[-_]/g, ' ').replace(/([A-Z])/g, ' $1').trim();
                     cleanName = cleanName.split(' ').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
-                    cleanName = cleanName.replace(/[0-9]+/g, '').replace(/\.gltf|\.glb|\.obj/g, '').trim();
-                    if (!cleanName || cleanName.length < 2) cleanName = `Part ${meshCounter + 1}`;
+                    cleanName = cleanName.replace(/\s+/g, ' ').replace(/\.gltf|\.glb|\.obj/gi, '').trim();
+                    if (!cleanName || cleanName.length < 2) cleanName = 'Part';
                 }
             }
 
@@ -466,7 +600,19 @@ export default function App() {
           });
         });
 
-        setMeshEntries(newEntries);
+        setMeshEntries(() => {
+          // Deduplicate names: if multiple entries share the same name, append a number
+          const nameCounts: Record<string, number> = {};
+          const nameIndex: Record<string, number> = {};
+          newEntries.forEach(e => { nameCounts[e.name] = (nameCounts[e.name] || 0) + 1; });
+          return newEntries.map(e => {
+            if (nameCounts[e.name] > 1) {
+              nameIndex[e.name] = (nameIndex[e.name] || 0) + 1;
+              return { ...e, name: `${e.name} ${nameIndex[e.name]}` };
+            }
+            return e;
+          });
+        });
         setHasModel(true);
         
         sphRef.current = { theta: 0.4, phi: 1.15, r: 2.2 };
@@ -843,36 +989,31 @@ export default function App() {
     });
   };
 
-  const resetProperties = () => {
+  const resetToDefault = async () => {
+    // Reset all UI state
     setRoughness(defaultProperties.roughness);
     setMetalness(defaultProperties.metalness);
     setSheen(defaultProperties.sheen);
     setTexScale(defaultProperties.texScale);
     setNormScale(defaultProperties.normScale);
     setBrightness(defaultProperties.brightness);
-    
     setPbrTextures({ map: null, normalMap: null, roughnessMap: null });
+    setBaseColorHex('#ffffff');
+    setSelectedPreset(null);
+    setMeshEntries([]);
+    setHasModel(false);
 
-    setMeshEntries(prev => {
-      const next = [...prev];
-      next.forEach(entry => {
-        if (!entry.checked) return;
-        
-        entry.greyMat.roughness = defaultProperties.roughness;
-        entry.greyMat.metalness = defaultProperties.metalness;
-        entry.greyMat.sheen = new THREE.Color(0x000000);
-        
-        entry.greyMat.map = entry.origGreyscaleMap;
-        entry.greyMat.normalMap = null;
-        entry.greyMat.roughnessMap = null;
-        
-        entry.greyMat.color.setHex(0xffffff).multiplyScalar(defaultProperties.brightness);
-        entry.greyMat.needsUpdate = true;
-      });
-      return next;
-    });
-    
-    showToast("Properties reset to normal");
+    // Reload default model
+    try {
+      setLoading(true);
+      setLoadingMsg('Reloading Default Sofa...');
+      const res = await fetch('https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/glbs/sofa_191.glb');
+      const arrayBuffer = await res.arrayBuffer();
+      onGLBBuffer(arrayBuffer);
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
   };
 
   const renderScene = async () => {
@@ -974,7 +1115,7 @@ export default function App() {
             <input type="file" accept=".glb,.gltf" onChange={(e) => handleFile(e.target.files?.[0] || null)} className="hidden" />
           </label>
           <button 
-            onClick={resetProperties}
+            onClick={resetToDefault}
             className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-5 py-2.5 rounded text-xs font-semibold transition-colors shadow-sm"
           >
             <RotateCcw size={14} /> Restart
@@ -1089,31 +1230,53 @@ export default function App() {
           </div>
 
 
-          {/* 3. Fabric Selection */}
+          {/* Fabric Selection — Polyhaven */}
           <div className="p-6">
-            <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Fabric Selection</div>
-            <div className="grid grid-cols-2 gap-3">
-              {fabricLibrary.map((fab, idx) => (
-                <div key={idx} className="flex flex-col items-center gap-2">
-                  <div
-                    className="w-full aspect-square cursor-pointer border-2 border-transparent hover:border-gray-300 transition-all bg-gray-50 flex items-center justify-center overflow-hidden"
-                    onClick={() => applyFabric(idx)}
-                  >
-                    {fabricThumbnails[idx] ? (
-                      <img 
-                        src={fabricThumbnails[idx]!} 
-                        alt={fab.name} 
-                        className="w-full h-full object-cover"
-                      />
-                    ) : (
-                      <div className="text-[10px] text-gray-500 text-center px-2">{fab.name}</div>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center">{fab.name}</span>
-                </div>
-              ))}
+            <div className="flex items-center justify-between mb-4">
+              <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400">Fabric Library</div>
+              {polyLoading && <div className="w-3 h-3 border border-gray-300 border-t-black rounded-full animate-spin" />}
             </div>
+            {polyFabrics.length > 0 ? (
+              <div className="grid grid-cols-2 gap-3">
+                {polyFabrics.map((fab) => (
+                  <div key={fab.id} className="flex flex-col items-center gap-1.5">
+                    <div
+                      className={`w-full aspect-square cursor-pointer border-2 transition-all bg-gray-50 flex items-center justify-center overflow-hidden rounded ${selectedPolyFabric === fab.id ? 'border-black' : 'border-transparent hover:border-gray-300'}`}
+                      onClick={() => applyPolyFabric(fab)}
+                    >
+                      <img
+                        src={fab.thumb}
+                        alt={fab.name}
+                        className="w-full h-full object-cover"
+                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                      />
+                    </div>
+                    <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center leading-tight">{fab.name}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              // Fallback: local library while loading or if API fails
+              <div className="grid grid-cols-2 gap-3">
+                {fabricLibrary.map((fab, idx) => (
+                  <div key={idx} className="flex flex-col items-center gap-2">
+                    <div
+                      className="w-full aspect-square cursor-pointer border-2 border-transparent hover:border-gray-300 transition-all bg-gray-50 flex items-center justify-center overflow-hidden"
+                      onClick={() => applyFabric(idx)}
+                    >
+                      {fabricThumbnails[idx] ? (
+                        <img src={fabricThumbnails[idx]!} alt={fab.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="text-[10px] text-gray-500 text-center px-2">{fab.name}</div>
+                      )}
+                    </div>
+                    <span className="text-[10px] font-medium text-gray-500 truncate w-full text-center">{fab.name}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
+
 
         </div>
         
