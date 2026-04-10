@@ -185,6 +185,7 @@ export default function App() {
   const [polyLoading, setPolyLoading] = useState(false);
   const [selectedPolyFabric, setSelectedPolyFabric] = useState<string | null>(null);
   const [fabricTab, setFabricTab] = useState<'custom' | 'polyhaven'>('custom');
+  const [activeFabricName, setActiveFabricName] = useState<string>(''); // tracks the last applied fabric label
 
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
@@ -550,6 +551,7 @@ export default function App() {
       });
 
       showToast(`${fabric.name} applied!`);
+      setActiveFabricName(fabric.name);
     } catch (e) {
       console.error(e);
       showToast('Failed to load Polyhaven texture');
@@ -607,7 +609,7 @@ export default function App() {
           const materials = mesh.material as THREE.Material[];
 
           materials.forEach((origMat: any, index) => {
-            const greyMat = new THREE.MeshPhysicalMaterial();
+            const greyMat = new THREE.MeshPhysicalMaterial({});
             
             if (origMat.color) greyMat.color.copy(origMat.color);
             greyMat.roughness = origMat.roughness !== undefined ? origMat.roughness : 0.7;
@@ -627,7 +629,7 @@ export default function App() {
             greyMat.alphaTest = origMat.alphaTest !== undefined ? origMat.alphaTest : 0;
             
             greyMat.sheen = new THREE.Color(0x000000); 
-            greyMat.sheenRoughness = 0.5;
+            (greyMat as any).sheenRoughness = 0.5;
             
             let origGreyscaleMap = null;
             if (origMat.map) {
@@ -754,7 +756,7 @@ export default function App() {
     }, (err) => {
       console.error(err);
       setLoading(false);
-      showToast('Failed to parse GLB: ' + ((err as Error).message || err));
+      showToast('Failed to parse GLB: ' + ((err as any).message || String(err)));
     });
   };
 
@@ -831,6 +833,7 @@ export default function App() {
       return next;
     });
     setPbrTextures(prev => ({ ...prev, map: null }));
+    setActiveFabricName(`Solid Colour ${hex.toUpperCase()}`);
     setTimeout(() => setLoading(false), 200);
   };
 
@@ -896,6 +899,7 @@ export default function App() {
       });
 
       showToast(`${preset.label} maps applied!`);
+      setActiveFabricName(preset.label);
     } catch (e) {
       showToast('Failed to load preset maps');
     } finally {
@@ -1045,6 +1049,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+    setActiveFabricName(fabric.name);
   };
 
   const updateBrightness = (val: number) => {
@@ -1193,43 +1198,207 @@ export default function App() {
     }
   };
 
-  const exportGLB = () => {
+  const exportGLB = async () => {
     if (!currentModelRef.current) {
       showToast("Load a model first!");
       return;
     }
-    
+
     setLoading(true);
-    setLoadingMsg("Exporting...");
+    setLoadingMsg("Preparing export...");
 
-    const exporter = new GLTFExporter();
-    exporter.parse(
-      currentModelRef.current,
-      (gltf) => {
-        const blob = gltf instanceof ArrayBuffer 
-          ? new Blob([gltf], { type: 'application/octet-stream' })
-          : new Blob([JSON.stringify(gltf)], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        
-        const link = document.createElement('a');
-        link.style.display = 'none';
-        link.href = url;
-        link.download = gltf instanceof ArrayBuffer ? 'customized_model.glb' : 'customized_model.gltf';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+    // ── helpers ──────────────────────────────────────────────────────────
 
-        setLoading(false);
-        showToast("Download started!");
-      },
-      (error) => {
-        console.error(error);
-        setLoading(false);
-        showToast("Export failed!");
-      },
-      { binary: true } 
-    );
+    // Bake an HTMLImageElement texture onto a canvas so GLTFExporter can embed it
+    const bakeTexIfNeeded = (tex: THREE.Texture | null): THREE.Texture | null => {
+      if (!tex || !tex.image) return tex;
+      if (tex.image instanceof HTMLCanvasElement) return tex;
+      try {
+        const img = tex.image as HTMLImageElement;
+        const w = img.naturalWidth || img.width || 512;
+        const h = img.naturalHeight || img.height || 512;
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return tex;
+        ctx.drawImage(img, 0, 0, w, h);
+        const baked = new THREE.CanvasTexture(canvas);
+        baked.encoding = tex.encoding;
+        baked.wrapS = tex.wrapS; baked.wrapT = tex.wrapT;
+        baked.repeat.copy(tex.repeat); baked.offset.copy(tex.offset);
+        baked.flipY = tex.flipY; baked.needsUpdate = true;
+        return baked;
+      } catch (e) { return tex; }
+    };
+
+    // Export a Three.js Texture to a PNG Blob via canvas
+    const texToBlob = (tex: THREE.Texture | null): Promise<Blob | null> => {
+      if (!tex || !tex.image) return Promise.resolve(null);
+      return new Promise(resolve => {
+        try {
+          const src = tex.image;
+          const w = (src as HTMLImageElement).naturalWidth || (src as HTMLCanvasElement).width || 512;
+          const h = (src as HTMLImageElement).naturalHeight || (src as HTMLCanvasElement).height || 512;
+          const canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return resolve(null);
+          ctx.drawImage(src as CanvasImageSource, 0, 0, w, h);
+          canvas.toBlob(b => resolve(b), 'image/png');
+        } catch { resolve(null); }
+      });
+    };
+
+    // ── bake textures for GLTFExporter ────────────────────────────────────
+    const bakedPairs: Array<{
+      mat: THREE.MeshPhysicalMaterial;
+      origMap: THREE.Texture | null;
+      origNorm: THREE.Texture | null;
+      origRough: THREE.Texture | null;
+    }> = [];
+
+    meshEntries.forEach(entry => {
+      if (!entry.checked) return;
+      const mat = entry.greyMat;
+      const origMap = mat.map; const origNorm = mat.normalMap; const origRough = mat.roughnessMap;
+      mat.map = bakeTexIfNeeded(mat.map);
+      mat.normalMap = bakeTexIfNeeded(mat.normalMap);
+      mat.roughnessMap = bakeTexIfNeeded(mat.roughnessMap);
+      mat.needsUpdate = true;
+      bakedPairs.push({ mat, origMap, origNorm, origRough });
+    });
+
+    const restoreTextures = () => {
+      bakedPairs.forEach(({ mat, origMap, origNorm, origRough }) => {
+        mat.map = origMap; mat.normalMap = origNorm; mat.roughnessMap = origRough;
+        mat.needsUpdate = true;
+      });
+    };
+
+    // ── export GLB ────────────────────────────────────────────────────────
+    setLoadingMsg("Exporting GLB...");
+
+    const glbBlob: Blob = await new Promise((resolve, reject) => {
+      const exporter = new GLTFExporter();
+      (exporter as any).parse(
+        currentModelRef.current!,
+        (gltf) => {
+          restoreTextures();
+          resolve(gltf instanceof ArrayBuffer
+            ? new Blob([gltf], { type: 'application/octet-stream' })
+            : new Blob([JSON.stringify(gltf)], { type: 'text/plain' }));
+        },
+        (err) => { restoreTextures(); reject(err); },
+        { binary: true } as any
+      );
+    }).catch(err => {
+      console.error(err);
+      showToast("GLB export failed!");
+      setLoading(false);
+      return null;
+    }) as Blob | null;
+
+    if (!glbBlob) return;
+
+    // ── collect texture blobs ─────────────────────────────────────────────
+    setLoadingMsg("Packing textures...");
+
+    // Gather unique textures across all checked parts
+    const checkedEntries = meshEntries.filter(e => e.checked);
+    // Use the first checked entry's greyMat as representative (they share the same applied textures)
+    const repMat = checkedEntries[0]?.greyMat ?? null;
+    const [diffBlob, normBlob, roughBlob] = await Promise.all([
+      texToBlob(repMat?.map ?? null),
+      texToBlob(repMat?.normalMap ?? null),
+      texToBlob(repMat?.roughnessMap ?? null),
+    ]);
+
+    // ── build config.txt ──────────────────────────────────────────────────
+    const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const partNames = checkedEntries.map(e => e.name).join(', ') || 'None';
+    const fabricSource = fabricTab === 'polyhaven'
+      ? `Polyhaven — ${selectedPolyFabric || 'unknown'}`
+      : `Custom Library`;
+
+    const configLines = [
+      '═══════════════════════════════════════════',
+      '  FABRIC CONFIGURATOR — EXPORT SUMMARY',
+      '═══════════════════════════════════════════',
+      '',
+      `Exported At    : ${timestamp}`,
+      '',
+      '── FABRIC ──────────────────────────────────',
+      `Fabric Name    : ${activeFabricName || 'Not specified'}`,
+      `Source         : ${fabricSource}`,
+      `Base Colour    : ${baseColorHex.toUpperCase()}`,
+      '',
+      '── SELECTED PARTS ──────────────────────────',
+      `Parts          : ${partNames}`,
+      '',
+      '── MATERIAL SETTINGS ───────────────────────',
+      `Brightness     : ${brightness.toFixed(2)}`,
+      `Roughness      : ${roughness.toFixed(2)}`,
+      `Metalness      : ${metalness.toFixed(2)}`,
+      `Fabric Fuzz    : ${sheen.toFixed(2)}`,
+      `Pattern Scale  : ${texScale.toFixed(1)}`,
+      `Bump Strength  : ${normScale.toFixed(1)}`,
+      '',
+      '── TEXTURE FILES ───────────────────────────',
+      `Diffuse Map    : ${diffBlob ? 'diffuse.png (included)' : 'none'}`,
+      `Normal Map     : ${normBlob ? 'normal.png (included)' : 'none'}`,
+      `Roughness Map  : ${roughBlob ? 'roughness.png (included)' : 'none'}`,
+      '',
+      '── FILES IN THIS ZIP ───────────────────────',
+      '  customized_model.glb  — 3D model with embedded textures',
+      '  config.txt            — this file',
+      ...(diffBlob  ? ['  diffuse.png           — base colour / pattern map'] : []),
+      ...(normBlob  ? ['  normal.png            — surface detail / bump map'] : []),
+      ...(roughBlob ? ['  roughness.png         — matte/gloss map'] : []),
+      '',
+      '═══════════════════════════════════════════',
+    ].join('\n');
+
+    const configBlob = new Blob([configLines], { type: 'text/plain' });
+
+    // ── build ZIP ─────────────────────────────────────────────────────────
+    setLoadingMsg("Building ZIP...");
+
+    // Load JSZip dynamically from CDN
+    const JSZip = await (async () => {
+      if ((window as any).JSZip) return (window as any).JSZip;
+      await new Promise<void>((res, rej) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        s.onload = () => res();
+        s.onerror = () => rej(new Error('JSZip load failed'));
+        document.head.appendChild(s);
+      });
+      return (window as any).JSZip;
+    })();
+
+    const zip = new JSZip();
+    const folderName = (activeFabricName || 'fabric_config').replace(/[^a-z0-9_\-\s]/gi, '').trim().replace(/\s+/g, '_') || 'fabric_config';
+
+    zip.file('customized_model.glb', glbBlob);
+    zip.file('config.txt', configBlob);
+    if (diffBlob)  zip.file('diffuse.png', diffBlob);
+    if (normBlob)  zip.file('normal.png', normBlob);
+    if (roughBlob) zip.file('roughness.png', roughBlob);
+
+    const zipBlob: Blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+    const url = URL.createObjectURL(zipBlob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${folderName}_${Date.now()}.zip`;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    setLoading(false);
+    showToast("ZIP downloaded — GLB + textures + config ✔");
   };
 
   return (
