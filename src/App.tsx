@@ -9,7 +9,35 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { Download, RotateCcw, UploadCloud, Info, Camera, X } from 'lucide-react';
+import { Download, RotateCcw, UploadCloud, Info, Camera, X, Check } from 'lucide-react';
+
+// Predefined fabric type presets (Normal + Roughness maps only)
+const FABRIC_PRESETS = [
+  {
+    id: 'cotton',
+    label: 'Cotton',
+    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/cotton_fabric/Normal.webp',
+    roughnessUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/cotton_fabric/Roughness.webp',
+    roughness: 0.75,
+    sheen: 0.1,
+  },
+  {
+    id: 'leather',
+    label: 'Leather',
+    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/leather_fabric/Normal.webp',
+    roughnessUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/leather_fabric/Roughness.webp',
+    roughness: 0.45,
+    sheen: 0.0,
+  },
+  {
+    id: 'velvet',
+    label: 'Velvet',
+    normalUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Normal.webp',
+    roughnessUrl: 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/velvet_fabric/Roughness.jpg',
+    roughness: 0.85,
+    sheen: 0.6,
+  },
+];
 
 // FAST GPU-Accelerated Greyscale
 function makeGreyscaleTex(origTex: THREE.Texture) {
@@ -148,6 +176,8 @@ export default function App() {
   const [isRendering, setIsRendering] = useState(false);
 
   const [fabricThumbnails, setFabricThumbnails] = useState<{ [key: number]: string | null }>({});
+  const [baseColorHex, setBaseColorHex] = useState('#ffffff');
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
 
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
@@ -517,7 +547,94 @@ export default function App() {
     });
   };
 
-  const toggleMeshCheck = (id: string, checked: boolean) => {
+  const applyBaseColor = (hex: string) => {
+    setBaseColorHex(hex);
+    const color = new THREE.Color(hex);
+    setMeshEntries(prev => {
+      const next = [...prev];
+      next.forEach(entry => {
+        if (!entry.checked) return;
+        // Remove pattern map, apply flat color tinted by brightness
+        entry.greyMat.map = null;
+        entry.greyMat.color.copy(color).multiplyScalar(brightness);
+        entry.greyMat.needsUpdate = true;
+      });
+      return next;
+    });
+    // Clear map from pbrTextures so it doesn't override
+    setPbrTextures(prev => ({ ...prev, map: null }));
+  };
+
+  const applyFabricPreset = async (presetId: string) => {
+    const preset = FABRIC_PRESETS.find(p => p.id === presetId);
+    if (!preset) return;
+
+    const hasChecked = meshEntries.some(e => e.checked);
+    if (!hasChecked) { showToast("Select a part first!"); return; }
+
+    setSelectedPreset(presetId);
+    setLoading(true);
+    setLoadingMsg('Loading preset maps...');
+
+    try {
+      const loadTex = (url: string, srgb: boolean) => new Promise<THREE.Texture>((resolve, reject) => {
+        new THREE.TextureLoader().load(url, (t) => {
+          t.wrapS = t.wrapT = THREE.RepeatWrapping;
+          t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+          t.flipY = false;
+          resolve(t);
+        }, undefined, reject);
+      });
+
+      const [normTex, roughTex] = await Promise.all([
+        loadTex(preset.normalUrl, false).catch(() => null),
+        loadTex(preset.roughnessUrl, false).catch(() => null),
+      ]);
+
+      setPbrTextures(prev => ({
+        ...prev,
+        normalMap: normTex,
+        roughnessMap: roughTex,
+      }));
+
+      setRoughness(preset.roughness);
+      setSheen(preset.sheen);
+
+      setMeshEntries(prev => {
+        const next = [...prev];
+        next.forEach(entry => {
+          if (!entry.checked) return;
+          const mat = entry.greyMat;
+          if (normTex) {
+            const nt = normTex.clone();
+            nt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            nt.needsUpdate = true;
+            mat.normalMap = nt;
+            mat.normalScale.set(normScale, normScale);
+          }
+          if (roughTex) {
+            const rt = roughTex.clone();
+            rt.repeat.set(texScale * entry.uvScaleFactor, texScale * entry.uvScaleFactor);
+            rt.needsUpdate = true;
+            mat.roughnessMap = rt;
+          }
+          mat.roughness = preset.roughness;
+          const s = Math.floor(preset.sheen * 255);
+          mat.sheen = new THREE.Color(`rgb(${s},${s},${s})`);
+          mat.needsUpdate = true;
+        });
+        return next;
+      });
+
+      showToast(`${preset.label} maps applied!`);
+    } catch (e) {
+      showToast('Failed to load preset maps');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+
     setMeshEntries(prev => prev.map(entry => {
       if (entry.id !== id) return entry;
       
@@ -882,66 +999,94 @@ export default function App() {
         {/* Left Panel: Fabric & Color */}
         <div className="w-80 border-r border-gray-200 flex flex-col overflow-y-auto shrink-0 bg-white z-30">
           
-          {/* 2. PBR Textures */}
+          {/* Fabric Library */}
           <div className="p-6 border-b border-gray-100">
             <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Fabric Library</div>
             
-            <div className="space-y-4 mb-6">
+            <div className="space-y-5">
+              {/* Base Color */}
               <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Base Color (Diffuse)</span>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Base Colour</span>
                   <div className="relative group flex items-center">
                     <Info size={12} className="text-gray-400 cursor-help" />
                     <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      The main color or pattern of the fabric. It defines how the material looks under neutral light.
+                      Pick a solid colour or upload a pattern image. The colour is applied as a tint.
                       <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
                     </div>
                   </div>
                 </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.map ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
-                  Upload Image
-                  {pbrTextures.map && <span className="text-black text-[10px]">Loaded ✔</span>}
-                  <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'map')} />
-                </label>
+                {/* Color swatch row + picker */}
+                <div className="flex items-center gap-3 mb-2">
+                  {['#ffffff','#f5e6d3','#d4b896','#8b6f47','#4a3728','#2c2c2c','#e8d5c4','#c9a882','#7a9b8c','#5b7fa6','#8b4444','#6b5b8b'].map(c => (
+                    <button
+                      key={c}
+                      onClick={() => applyBaseColor(c)}
+                      className="w-6 h-6 rounded-full border-2 transition-transform hover:scale-110 flex-shrink-0"
+                      style={{ backgroundColor: c, borderColor: baseColorHex === c ? '#000' : '#e5e7eb' }}
+                    />
+                  ))}
+                </div>
+                <div className="flex gap-2 mt-2">
+                  <div className="flex items-center gap-2 flex-1 border border-gray-200 rounded px-3 py-2 bg-gray-50 hover:border-gray-300 transition-colors cursor-pointer"
+                    onClick={() => document.getElementById('base-color-picker')?.click()}
+                  >
+                    <div className="w-5 h-5 rounded border border-gray-300 flex-shrink-0" style={{ backgroundColor: baseColorHex }} />
+                    <span className="text-xs text-gray-600 font-medium">{baseColorHex.toUpperCase()}</span>
+                    <input id="base-color-picker" type="color" value={baseColorHex} onChange={(e) => applyBaseColor(e.target.value)} className="hidden" />
+                    <span className="text-[10px] text-gray-400 ml-auto">Custom</span>
+                  </div>
+                  <label className={`flex items-center gap-2 px-3 py-2 border rounded text-xs font-medium cursor-pointer transition-colors flex-shrink-0 ${pbrTextures.map ? 'border-black text-black bg-gray-50' : 'border-gray-200 text-gray-500 bg-gray-50 hover:border-gray-300'}`}>
+                    {pbrTextures.map ? <><Check size={11} /> Pattern</> : '+ Pattern'}
+                    <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'map')} />
+                  </label>
+                </div>
               </div>
 
+              {/* Fabric Type Presets (Normal + Roughness) */}
               <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Normal Map (GL)</span>
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Fabric Type</span>
                   <div className="relative group flex items-center">
                     <Info size={12} className="text-gray-400 cursor-help" />
                     <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      Adds physical bumps, wrinkles, and texture depth without changing the 3D shape.
+                      Choose a preset to apply matching Normal + Roughness maps. You can still override with custom images below.
                       <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
                     </div>
                   </div>
                 </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.normalMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
-                  Upload Image
-                  {pbrTextures.normalMap && <span className="text-black text-[10px]">Loaded ✔</span>}
-                  <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'normalMap')} />
-                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {FABRIC_PRESETS.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => applyFabricPreset(p.id)}
+                      className={`px-3 py-2.5 border rounded text-xs font-semibold transition-all ${selectedPreset === p.id ? 'border-black bg-black text-white' : 'border-gray-200 text-gray-600 hover:border-gray-400 hover:text-black bg-white'}`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
-              <div>
-                <div className="flex items-center gap-1.5 mb-1.5">
-                  <span className="text-[10px] font-semibold text-gray-500 block uppercase tracking-wider">Roughness Map</span>
-                  <div className="relative group flex items-center">
-                    <Info size={12} className="text-gray-400 cursor-help" />
-                    <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 hidden group-hover:block w-48 p-2 bg-gray-900 text-white text-[10px] rounded shadow-lg z-50 normal-case tracking-normal font-normal text-center">
-                      Controls how shiny or matte different parts of the fabric are. White is matte, black is shiny.
-                      <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-gray-900"></div>
-                    </div>
-                  </div>
+              {/* Custom Override Maps */}
+              <div className="pt-1">
+                <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Custom Override Maps</div>
+                <div className="space-y-2">
+                  <label className={`flex justify-between items-center w-full px-3 py-2.5 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.normalMap ? 'border-black text-black' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                    <span>Normal Map</span>
+                    {pbrTextures.normalMap ? <span className="text-black text-[10px]">✔ Custom</span> : <span className="text-[10px] text-gray-400">Upload to override</span>}
+                    <input type="file" className="hidden" accept="image/*" onChange={(e) => { loadPBRMap(e.target.files?.[0] || null, 'normalMap'); setSelectedPreset(null); }} />
+                  </label>
+                  <label className={`flex justify-between items-center w-full px-3 py-2.5 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.roughnessMap ? 'border-black text-black' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                    <span>Roughness Map</span>
+                    {pbrTextures.roughnessMap ? <span className="text-black text-[10px]">✔ Custom</span> : <span className="text-[10px] text-gray-400">Upload to override</span>}
+                    <input type="file" className="hidden" accept="image/*" onChange={(e) => { loadPBRMap(e.target.files?.[0] || null, 'roughnessMap'); setSelectedPreset(null); }} />
+                  </label>
                 </div>
-                <label className={`flex justify-between items-center w-full px-4 py-3 text-left bg-gray-50 border rounded text-xs font-medium cursor-pointer transition-colors ${pbrTextures.roughnessMap ? 'border-black text-black' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}>
-                  Upload Image
-                  {pbrTextures.roughnessMap && <span className="text-black text-[10px]">Loaded ✔</span>}
-                  <input type="file" className="hidden" accept="image/*" onChange={(e) => loadPBRMap(e.target.files?.[0] || null, 'roughnessMap')} />
-                </label>
               </div>
             </div>
           </div>
+
 
           {/* 3. Fabric Selection */}
           <div className="p-6">
