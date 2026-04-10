@@ -1399,7 +1399,7 @@ export default function App() {
           />
           <div className="flex flex-col leading-tight">
             <span className="text-lg font-bold text-white tracking-widest uppercase" style={{ letterSpacing: '0.18em' }}>LIVINIT</span>
-            <span className="text-[10px] font-medium text-gray-400 tracking-widest uppercase">AI Customiser</span>
+            <span className="text-[10px] font-medium text-gray-400 tracking-widest uppercase">Customiser</span>
           </div>
         </div>
         <div className="flex gap-3">
