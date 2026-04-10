@@ -1403,26 +1403,33 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen bg-white text-gray-900 overflow-hidden">
-      <header className="flex items-center justify-between px-8 py-5 border-b border-gray-200 shrink-0 bg-white">
-        <div className="flex items-baseline gap-4">
-          <h1 className="text-xl font-bold text-gray-900 tracking-tight">Configurator</h1>
-          <span className="text-xs font-medium tracking-wide text-gray-400 uppercase">Pro Studio Engine</span>
+      <header className="flex items-center justify-between px-8 py-4 border-b border-gray-200 shrink-0 bg-black">
+        <div className="flex items-center gap-3">
+          <img 
+            src="https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/logo.webp"
+            alt="Livinit"
+            className="h-10 w-auto object-contain"
+          />
+          <div className="flex flex-col leading-tight">
+            <span className="text-lg font-bold text-white tracking-widest uppercase" style={{ letterSpacing: '0.18em' }}>LIVINIT</span>
+            <span className="text-[10px] font-medium text-gray-400 tracking-widest uppercase">AI Customiser</span>
+          </div>
         </div>
-        <div className="flex gap-4">
-          <label className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-5 py-2.5 rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm">
+        <div className="flex gap-3">
+          <label className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded text-xs font-semibold cursor-pointer transition-colors shadow-sm">
             Upload GLB
             <input type="file" accept=".glb,.gltf" onChange={(e) => handleFile(e.target.files?.[0] || null)} className="hidden" />
           </label>
           <button 
             onClick={resetToDefault}
-            className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-5 py-2.5 rounded text-xs font-semibold transition-colors shadow-sm"
+            className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded text-xs font-semibold transition-colors shadow-sm"
           >
             <RotateCcw size={14} /> Restart
           </button>
           <button 
             onClick={renderScene} 
             disabled={isRendering}
-            className="flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-700 border border-gray-200 px-5 py-2.5 rounded text-xs font-semibold transition-colors shadow-sm disabled:opacity-50"
+            className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 px-5 py-2.5 rounded text-xs font-semibold transition-colors shadow-sm disabled:opacity-50"
           >
             <Camera size={14} /> {isRendering ? 'Rendering...' : 'Render'}
           </button>
