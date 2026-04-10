@@ -980,28 +980,48 @@ export default function App() {
       setTexScale(scl);
       setNormScale(bmp);
 
-      // Apply textures to scale
-      [diffTex, normTex, roughTex].forEach(t => { if (t) t.repeat.set(scl, scl); });
-
-      // Inject Textures into Meshes
+      // Apply textures to scale — clone per entry so each mesh has its own repeat
       setMeshEntries(prev => {
         const next = [...prev];
         next.forEach(entry => {
           if (entry.checked) {
             const mat = entry.greyMat;
-            mat.map = diffTex;
-            mat.normalMap = normTex;
-            mat.roughnessMap = roughTex;
-            
-            // Brightness Multiplier logic using material color tinting
+
+            if (diffTex) {
+              const dt = diffTex.clone();
+              dt.wrapS = dt.wrapT = THREE.RepeatWrapping;
+              dt.repeat.set(scl, scl);
+              dt.needsUpdate = true;
+              mat.map = dt;
+            } else {
+              mat.map = null;
+            }
+            if (normTex) {
+              const nt = normTex.clone();
+              nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
+              nt.repeat.set(scl, scl);
+              nt.needsUpdate = true;
+              mat.normalMap = nt;
+            } else {
+              mat.normalMap = null;
+            }
+            if (roughTex) {
+              const rt = roughTex.clone();
+              rt.wrapS = rt.wrapT = THREE.RepeatWrapping;
+              rt.repeat.set(scl, scl);
+              rt.needsUpdate = true;
+              mat.roughnessMap = rt;
+            } else {
+              mat.roughnessMap = null;
+            }
+
             mat.color.setRGB(bright, bright, bright);
             mat.normalScale.set(bmp, bmp);
-            
+
             const s = shn * 255;
             mat.sheen = new THREE.Color(`rgb(${Math.floor(s)},${Math.floor(s)},${Math.floor(s)})`);
             mat.roughness = rgh;
             mat.metalness = mtl;
-            
             mat.needsUpdate = true;
           }
         });
@@ -1059,15 +1079,17 @@ export default function App() {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        const finalScale = val;
         if (entry.greyMat.map && entry.greyMat.map !== entry.origGreyscaleMap) {
-           entry.greyMat.map.repeat.set(finalScale, finalScale);
+          entry.greyMat.map.repeat.set(val, val);
+          entry.greyMat.map.needsUpdate = true;
         }
         if (entry.greyMat.normalMap) {
-           entry.greyMat.normalMap.repeat.set(finalScale, finalScale);
+          entry.greyMat.normalMap.repeat.set(val, val);
+          entry.greyMat.normalMap.needsUpdate = true;
         }
         if (entry.greyMat.roughnessMap) {
-           entry.greyMat.roughnessMap.repeat.set(finalScale, finalScale);
+          entry.greyMat.roughnessMap.repeat.set(val, val);
+          entry.greyMat.roughnessMap.needsUpdate = true;
         }
         entry.greyMat.needsUpdate = true;
       });
