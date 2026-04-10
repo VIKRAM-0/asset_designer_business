@@ -75,14 +75,14 @@ function makeGreyscaleTex(origTex: THREE.Texture) {
 const BASE_URL = 'https://nyvlydjdvhsunqbliqru.supabase.co/storage/v1/object/public/fabric_assets/';
 
 const fabricLibrary = [
-  { name: 'Boucle Fabric', folder: BASE_URL + 'boucle_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Cotton Fabric', folder: BASE_URL + 'cotton_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Curly Fabric', folder: BASE_URL + 'curly_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Dotted Fabric', folder: BASE_URL + 'dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Leather Fabric', folder: BASE_URL + 'leather_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Leather Dotted', folder: BASE_URL + 'leather_dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Line Fabric', folder: BASE_URL + 'line_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } },
-  { name: 'Printed Fabric', folder: BASE_URL + 'printted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 3.0, bump: 1.0 } }
+  { name: 'Boucle Fabric', folder: BASE_URL + 'boucle_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Cotton Fabric', folder: BASE_URL + 'cotton_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Curly Fabric', folder: BASE_URL + 'curly_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Dotted Fabric', folder: BASE_URL + 'dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Leather Fabric', folder: BASE_URL + 'leather_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Leather Dotted', folder: BASE_URL + 'leather_dotted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Line Fabric', folder: BASE_URL + 'line_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } },
+  { name: 'Printed Fabric', folder: BASE_URL + 'printted_fabric', defaults: { brightness: 1.0, sheen: 0.0, roughness: 0.7, metalness: 0.0, scale: 10.0, bump: 1.0 } }
 ];
 
 // Smart Texture Loader (Checks multiple extensions)
@@ -145,7 +145,7 @@ const defaultProperties = {
   roughness: 0.7,
   metalness: 0.0,
   sheen: 0.0,
-  texScale: 3.0,
+  texScale: 10.0,
   normScale: 1.0,
   brightness: 1.0
 };
@@ -1146,7 +1146,7 @@ export default function App() {
 
     try {
       setIsRendering(true);
-      setLoadingMsg("Generating AI Render...");
+      setLoadingMsg("Rendering in living room...");
       setLoading(true);
 
       // Render the scene to the canvas before capturing
@@ -1571,7 +1571,7 @@ export default function App() {
                   </div>
                 )}
                 {polyFabrics.length === 0 && !polyLoading && (
-                  <div className="text-[10px] text-gray-400 text-center py-6">Polyhaven unavailable</div>
+                  <div className="text-[10px] text-gray-400 text-center py-6">Fabric library unavailable</div>
                 )}
                 <div className="grid grid-cols-2 gap-3">
                   {polyFabrics.map((fab) => (
@@ -1763,7 +1763,7 @@ export default function App() {
 
               <div className="flex items-center gap-4">
                 <label className="text-xs font-medium text-gray-600 w-20">Pattern Scale</label>
-                <input type="range" min="0.2" max="10" step="0.1" value={texScale} onChange={(e) => updateTextureScale(parseFloat(e.target.value))} className="flex-1 h-1 bg-gray-200 rounded appearance-none cursor-pointer accent-black" />
+                <input type="range" min="0.2" max="20" step="0.1" value={texScale} onChange={(e) => updateTextureScale(parseFloat(e.target.value))} className="flex-1 h-1 bg-gray-200 rounded appearance-none cursor-pointer accent-black" />
                 <span className="text-xs font-medium text-gray-900 w-8 text-right tabular-nums">{texScale.toFixed(1)}</span>
               </div>
 
@@ -1783,13 +1783,13 @@ export default function App() {
         <div className="fixed inset-0 bg-black/80 z-[100] flex items-center justify-center p-8 backdrop-blur-sm">
           <div className="bg-white rounded-lg overflow-hidden shadow-2xl max-w-4xl w-full flex flex-col">
             <div className="flex justify-between items-center p-4 border-b border-gray-100">
-              <h2 className="text-sm font-bold text-gray-900 tracking-tight">AI Render Result</h2>
+              <h2 className="text-sm font-bold text-gray-900 tracking-tight">Render</h2>
               <button onClick={() => setRenderedImage(null)} className="text-gray-500 hover:text-black transition-colors">
                 <X size={20} />
               </button>
             </div>
             <div className="p-6 bg-gray-50 flex justify-center items-center">
-              <img src={renderedImage} alt="AI Render" className="max-h-[70vh] object-contain rounded shadow-sm" />
+              <img src={renderedImage} alt="Render" className="max-h-[70vh] object-contain rounded shadow-sm" />
             </div>
             <div className="p-4 border-t border-gray-100 flex justify-end">
               <a 
