@@ -657,37 +657,39 @@ export default function App() {
               greyMat.color.set(0xcccccc);
             }
 
-            // ── SPATIAL NAMING ─────────────────────────────────────────
-            // Scraped GLBs have no useful names. Ignore them entirely and 
-            // rely on world-space bounding-box geometry analysis.
-            
+            // ── NAMING: GLB node name first, spatial heuristic fallback ──
+            const KNOWN_PARTS: Record<string, string> = {
+              'wooden frame': 'Wooden Frame',
+              'seat cushion': 'Seat Cushion',
+              'back cushion': 'Back Cushion',
+            };
+            let cleanName = '';
+            let _n: THREE.Object3D | null = mesh;
+            while (_n) {
+              const key = (_n.name || '').trim().toLowerCase();
+              if (KNOWN_PARTS[key]) { cleanName = KNOWN_PARTS[key]; break; }
+              _n = _n.parent;
+            }
+
             mesh.geometry.computeBoundingBox();
             const meshBox3 = new THREE.Box3().setFromObject(mesh);
-            const mc  = meshBox3.getCenter(new THREE.Vector3());   // mesh center (world)
-            const ms  = meshBox3.getSize(new THREE.Vector3());      // mesh size  (world)
+            const mc  = meshBox3.getCenter(new THREE.Vector3());
+            const ms  = meshBox3.getSize(new THREE.Vector3());
             const wc  = worldCenter;
             const ws  = worldSize;
-
-            // Normalised relative positions  (-1 … +1 range)
-            const relY = (mc.y - wc.y) / (ws.y * 0.5);   // -1 = very bottom, +1 = very top
-            const relZ = (mc.z - wc.z) / (ws.z * 0.5);   // -1 = very back,   +1 = very front
-            const relX = (mc.x - wc.x) / (ws.x * 0.5);   // -1 = far left,    +1 = far right
+            const relY = (mc.y - wc.y) / (ws.y * 0.5);
+            const relZ = (mc.z - wc.z) / (ws.z * 0.5);
+            const relX = (mc.x - wc.x) / (ws.x * 0.5);
             const absX = Math.abs(relX);
-
-            // Volume ratio vs entire model bounding volume
             const meshVol  = ms.x * ms.y * ms.z;
             const worldVol = ws.x * ws.y * ws.z;
             const volRatio = worldVol > 0 ? meshVol / worldVol : 0;
-
-            // Flatness: a very flat mesh (e.g. thin seam / stitching line) has
-            // one dimension much smaller than the other two.
             const dims    = [ms.x, ms.y, ms.z].sort((a, b) => a - b);
-            const flatness = dims[2] > 0 ? dims[0] / dims[2] : 1; // 0 = very flat, 1 = cube
+            const flatness = dims[2] > 0 ? dims[0] / dims[2] : 1;
 
-            let cleanName = '';
-
-            // 1. Legs / base  — low Y, typically small volume, roughly symmetric
-            if (relY < -0.55) {
+            // 1. Legs / base
+            if (cleanName) { /* GLB name found — skip heuristic */ }
+            else if (relY < -0.55) {
               cleanName = 'Legs / Base';
 
             // 2. Backrest — high Z (rear), upper half of model
