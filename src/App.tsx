@@ -168,6 +168,11 @@ export default function App() {
   const [hasModel, setHasModel] = useState(false);
   
   const [meshEntries, setMeshEntries] = useState<MeshEntry[]>([]);
+  // Ref mirror so async callbacks (exportGLB) always read the latest entries,
+  // not a stale closure snapshot.
+  const meshEntriesRef = useRef<MeshEntry[]>([]);
+  // Keep ref in sync whenever state updates
+  useEffect(() => { meshEntriesRef.current = meshEntries; }, [meshEntries]);
   
   const [pbrTextures, setPbrTextures] = useState<{
     map: THREE.Texture | null;
@@ -1321,22 +1326,32 @@ export default function App() {
     };
 
     // ── bake textures for GLTFExporter ────────────────────────────────────
+    // Use ref (not state) to get latest entries — avoids stale closure bug.
+    const currentEntries = meshEntriesRef.current;
+
     const bakedPairs: Array<{
-      mat: THREE.MeshPhysicalMaterial;
+      mat: any;
       origMap: THREE.Texture | null;
       origNorm: THREE.Texture | null;
       origRough: THREE.Texture | null;
     }> = [];
 
-    meshEntries.forEach(entry => {
-      if (!entry.checked) return;
-      const mat = entry.greyMat;
-      const origMap = mat.map; const origNorm = mat.normalMap; const origRough = mat.roughnessMap;
-      mat.map = bakeTexIfNeeded(mat.map);
-      mat.normalMap = bakeTexIfNeeded(mat.normalMap);
-      mat.roughnessMap = bakeTexIfNeeded(mat.roughnessMap);
-      mat.needsUpdate = true;
-      bakedPairs.push({ mat, origMap, origNorm, origRough });
+    // BUG FIX: Bake ALL entries not just checked ones.
+    // The exporter walks the entire scene. Unchecked parts still have origMat on the
+    // mesh, which often has HTMLImageElement textures GLTFExporter can't serialize —
+    // it silently drops them, producing a GLB with missing/broken materials.
+    currentEntries.forEach(entry => {
+      const matArray = entry.mesh.material as THREE.Material[];
+      const activeMat = matArray[entry.matIndex] as any;
+      if (!activeMat) return;
+      const origMap   = activeMat.map           ?? null;
+      const origNorm  = activeMat.normalMap     ?? null;
+      const origRough = activeMat.roughnessMap  ?? null;
+      if (origMap)   activeMat.map          = bakeTexIfNeeded(origMap);
+      if (origNorm)  activeMat.normalMap    = bakeTexIfNeeded(origNorm);
+      if (origRough) activeMat.roughnessMap = bakeTexIfNeeded(origRough);
+      activeMat.needsUpdate = true;
+      bakedPairs.push({ mat: activeMat, origMap, origNorm, origRough });
     });
 
     const restoreTextures = () => {
@@ -1351,16 +1366,22 @@ export default function App() {
 
     const glbBlob: Blob = await new Promise((resolve, reject) => {
       const exporter = new GLTFExporter();
+      // Three.js r139 GLTFExporter.parse() signature is:
+      //   parse(input, onDone, options)   ← 3 args, NO onError parameter
+      // The app was incorrectly calling it with 4 args (input, onDone, onError, options),
+      // which meant { binary: true } was silently dropped → exporter produced JSON not binary.
       (exporter as any).parse(
         currentModelRef.current!,
-        (gltf) => {
+        (gltf: ArrayBuffer | object) => {
           restoreTextures();
-          resolve(gltf instanceof ArrayBuffer
-            ? new Blob([gltf], { type: 'application/octet-stream' })
-            : new Blob([JSON.stringify(gltf)], { type: 'text/plain' }));
+          if (gltf instanceof ArrayBuffer) {
+            resolve(new Blob([gltf], { type: 'model/gltf-binary' }));
+          } else {
+            // Should never happen with binary:true, but guard anyway
+            reject(new Error('GLTFExporter returned JSON instead of binary — check options'));
+          }
         },
-        (err) => { restoreTextures(); reject(err); },
-        { binary: true } as any
+        { binary: true } as any   // ← options is the 3rd argument (was being passed as 4th)
       );
     }).catch(err => {
       console.error(err);
@@ -1374,9 +1395,9 @@ export default function App() {
     // ── collect texture blobs ─────────────────────────────────────────────
     setLoadingMsg("Packing textures...");
 
-    // Gather unique textures across all checked parts
-    const checkedEntries = meshEntries.filter(e => e.checked);
-    // Use the first checked entry's greyMat as representative (they share the same applied textures)
+    const checkedEntries = currentEntries.filter(e => e.checked);
+    // Use the first checked entry's greyMat as representative for the loose texture files.
+    // (All checked parts share the same last-applied fabric textures.)
     const repMat = checkedEntries[0]?.greyMat ?? null;
     const [diffBlob, normBlob, roughBlob] = await Promise.all([
       texToBlob(repMat?.map ?? null),
