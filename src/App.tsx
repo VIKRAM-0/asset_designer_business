@@ -611,51 +611,49 @@ export default function App() {
           const materials = mesh.material as THREE.Material[];
 
           materials.forEach((origMat: any, index) => {
-            const greyMat = new THREE.MeshPhysicalMaterial({});
-            
+            // Build greyMat — the material used when a part is selected/configured.
+            // Start with safe defaults so it is ALWAYS visible.
+            const greyMat = new THREE.MeshPhysicalMaterial({
+              color: new THREE.Color(0xc8c0b8),   // neutral warm grey — always visible
+              roughness: 0.7,
+              metalness: 0.0,
+              side: THREE.DoubleSide,              // never cull back-faces
+              sheen: 0,                            // number 0-1, NOT a Color object
+              sheenRoughness: 0.5,
+            });
+
+            // Copy material properties from origMat where they are meaningful
+            if (origMat.roughness !== undefined) greyMat.roughness = origMat.roughness;
+            if (origMat.metalness !== undefined) greyMat.metalness = origMat.metalness;
+            if (origMat.transparent) {
+              greyMat.transparent = true;
+              greyMat.opacity = origMat.opacity ?? 1;
+              greyMat.alphaTest = origMat.alphaTest ?? 0;
+            }
+
+            // Copy origMat color only if it is a visible non-black color
             if (origMat.color) {
               const c = origMat.color;
-              // Only copy if not black — black means missing baseColorFactor in GLB
-              if (c.r + c.g + c.b > 0.05) {
-                greyMat.color.copy(origMat.color);
-              } else {
-                greyMat.color.set(0xc8c0b8);  // neutral warm grey fallback
-              }
-            } else {
-              greyMat.color.set(0xc8c0b8);
+              if (c.r + c.g + c.b > 0.1) greyMat.color.copy(c);
             }
-            
-            if (origMat.map) greyMat.map = origMat.map;
+
+            // Copy maps
             if (origMat.normalMap) {
-                greyMat.normalMap = origMat.normalMap;
-                if (origMat.normalScale) greyMat.normalScale.copy(origMat.normalScale);
+              greyMat.normalMap = origMat.normalMap;
+              if (origMat.normalScale) greyMat.normalScale.copy(origMat.normalScale);
             }
             if (origMat.roughnessMap) greyMat.roughnessMap = origMat.roughnessMap;
             if (origMat.metalnessMap) greyMat.metalnessMap = origMat.metalnessMap;
-            
-            greyMat.side = origMat.side !== undefined ? origMat.side : THREE.FrontSide;
-            greyMat.transparent = origMat.transparent || false;
-            greyMat.opacity = origMat.opacity !== undefined ? origMat.opacity : 1;
-            greyMat.alphaTest = origMat.alphaTest !== undefined ? origMat.alphaTest : 0;
-            
-            greyMat.sheen = new THREE.Color(0x000000); 
-            (greyMat as any).sheenRoughness = 0.5;
-            
-            let origGreyscaleMap = null;
+
+            // Greyscale the diffuse map if present; fall back to original if it fails
+            let origGreyscaleMap: THREE.Texture | null = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
               greyMat.map = origGreyscaleMap ?? origMat.map;
-            }
-            // Ensure color is always visible regardless of map
-            if (!greyMat.map || greyMat.color.r + greyMat.color.g + greyMat.color.b < 0.05) {
-              greyMat.color.set(0xc8c0b8);
+              greyMat.color.set(0xffffff); // white so map shows at full brightness
             }
 
-            // Don't set default color - fabrics will handle this
             greyMat.needsUpdate = true;
-            if (!greyMat.map) {
-              greyMat.color.set(0xcccccc);
-            }
 
             // ── NAMING: GLB node name first, spatial heuristic fallback ──
             const KNOWN_PARTS: Record<string, string> = {
@@ -910,8 +908,7 @@ export default function App() {
             mat.roughnessMap = rt;
           }
           mat.roughness = preset.roughness;
-          const s = Math.floor(preset.sheen * 255);
-          mat.sheen = new THREE.Color(`rgb(${s},${s},${s})`);
+          mat.sheen = preset.sheen;
           mat.needsUpdate = true;
         });
         return next;
@@ -1037,8 +1034,7 @@ export default function App() {
             mat.color.setRGB(bright, bright, bright);
             mat.normalScale.set(bmp, bmp);
 
-            const s = shn * 255;
-            mat.sheen = new THREE.Color(`rgb(${Math.floor(s)},${Math.floor(s)},${Math.floor(s)})`);
+            mat.sheen = shn;
             mat.roughness = rgh;
             mat.metalness = mtl;
             mat.needsUpdate = true;
@@ -1081,8 +1077,7 @@ export default function App() {
       next.forEach(entry => {
         if (!entry.checked) return;
         if (prop === 'sheen') {
-            const c = Math.floor(val * 255);
-            entry.greyMat.sheen = new THREE.Color(`rgb(${c},${c},${c})`);
+            entry.greyMat.sheen = val;
         } else {
             (entry.greyMat as any)[prop] = val;
         }
