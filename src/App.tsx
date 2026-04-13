@@ -574,11 +574,13 @@ export default function App() {
         currentModelRef.current = currentModel;
 
         const box = new THREE.Box3().setFromObject(currentModel);
-        const ctr = box.getCenter(new THREE.Vector3());
         const sz = box.getSize(new THREE.Vector3());
         const sc = 1.6 / Math.max(sz.x, sz.y, sz.z);
         currentModel.scale.setScalar(sc);
-        currentModel.position.sub(ctr.multiplyScalar(sc));
+        // Re-compute center AFTER scale is applied
+        const box2 = new THREE.Box3().setFromObject(currentModel);
+        const ctr = box2.getCenter(new THREE.Vector3());
+        currentModel.position.sub(ctr);
         currentModel.updateMatrixWorld(true);
         sceneRef.current.add(currentModel);
 
