@@ -58,7 +58,13 @@ function makeGreyscaleTex(origTex: THREE.Texture): THREE.Texture | null {
     c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) return null;
-    
+
+    // Fill opaque white background FIRST — critical fix for renderer.alpha:true.
+    // Without this, canvas pixels default to (0,0,0,0). THREE.js shader outputs
+    // gl_FragColor.a = textureAlpha. With alpha:true renderer, any pixel with
+    // alpha=0 is transparent and shows the white page background → mesh invisible.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, w, h);
     ctx.filter = 'grayscale(100%) brightness(1.2) contrast(1.1)';
     ctx.drawImage(img, 0, 0, w, h);
 
@@ -667,9 +673,11 @@ export default function App() {
               if (origGreyscaleMap) {
                 greyMat.map = origGreyscaleMap;
                 greyMat.color.set(0xd4d0cc);
-            } else if (origMat.map) {
-                greyMat.map = origMat.map.clone();
-                greyMat.map.needsUpdate = true;
+            } else {
+                // Greyscale failed — don't fall back to origMat.map.
+                // origMat.map may have alpha<1 pixels which, with renderer.alpha:true,
+                // would make fragments transparent/invisible. Solid grey is always safe.
+                greyMat.map = null;
                 greyMat.color.set(0xd4d0cc);
               }
             }
