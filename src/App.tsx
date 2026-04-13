@@ -56,7 +56,12 @@ function makeGreyscaleTex(origTex: THREE.Texture) {
     ctx.drawImage(img, 0, 0, w, h);
 
     const t = new THREE.CanvasTexture(c);
-    t.encoding = origTex.encoding;
+    // Support both old (.encoding) and new (.colorSpace) Three.js API
+    if ('colorSpace' in origTex) {
+      (t as any).colorSpace = (origTex as any).colorSpace;
+    } else {
+      (t as any).encoding = (origTex as any).encoding;
+    }
     t.wrapS = origTex.wrapS; t.wrapT = origTex.wrapT;
     t.repeat.copy(origTex.repeat); t.offset.copy(origTex.offset);
     if (origTex.flipY !== undefined) t.flipY = origTex.flipY;
@@ -96,7 +101,12 @@ function tryLoadTexture(url: string, isSrgb: boolean): Promise<THREE.Texture> {
       url,
       (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        tex.encoding = isSrgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+        // Support both Three.js r152+ (.colorSpace) and older (.encoding)
+        if ('colorSpace' in tex) {
+          (tex as any).colorSpace = isSrgb ? 'srgb' : 'srgb-linear';
+        } else {
+          (tex as any).encoding = isSrgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
+        }
         texCache[url] = tex;
         resolve(tex);
       },
@@ -218,8 +228,17 @@ export default function App() {
     
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(window.devicePixelRatio);
-    renderer.outputEncoding = THREE.sRGBEncoding;
-    renderer.physicallyCorrectLights = true;
+    // Support both Three.js r152+ and older API
+    if ('outputColorSpace' in renderer) {
+      (renderer as any).outputColorSpace = 'srgb';
+    } else {
+      (renderer as any).outputEncoding = (THREE as any).sRGBEncoding;
+    }
+    if ('useLegacyLights' in renderer) {
+      (renderer as any).useLegacyLights = false;
+    } else {
+      (renderer as any).physicallyCorrectLights = true;
+    }
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
 // 1. Match the exact exposure from the business side
     renderer.toneMappingExposure = 1.2; 
@@ -504,7 +523,11 @@ export default function App() {
         new Promise((resolve, reject) => {
           new THREE.TextureLoader().load(url, (t) => {
             t.wrapS = t.wrapT = THREE.RepeatWrapping;
-            t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+            if ('colorSpace' in t) {
+              (t as any).colorSpace = srgb ? 'srgb' : 'srgb-linear';
+            } else {
+              (t as any).encoding = srgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
+            }
             t.flipY = false;
             resolve(t);
           }, undefined, reject);
@@ -530,7 +553,9 @@ export default function App() {
             dt.repeat.set(texScale, texScale);
             dt.needsUpdate = true;
             mat.map = dt;
-            mat.color.setRGB(brightness, brightness, brightness);
+            // White color multiplier so diffuse texture renders correctly
+            mat.color.set(0xffffff);
+            mat.color.multiplyScalar(brightness);
           }
           if (normTex) {
             const nt = normTex.clone();
@@ -654,8 +679,8 @@ export default function App() {
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
               greyMat.map = origGreyscaleMap ?? origMat.map;
-              // Set neutral multiplier so greyscale map renders at correct brightness
-              greyMat.color.set(0xd4d0cc);
+              // Use white so the greyscale map renders at its own brightness
+              greyMat.color.set(0xffffff);
             }
             // No map → greyMat.color stays as the warm grey set above
 
@@ -809,8 +834,19 @@ export default function App() {
       texture.wrapT = THREE.RepeatWrapping;
       texture.flipY = false;
 
-      if (mapType === 'map') texture.encoding = THREE.sRGBEncoding;
-      else texture.encoding = THREE.LinearEncoding;
+      if (mapType === 'map') {
+        if ('colorSpace' in texture) {
+          (texture as any).colorSpace = 'srgb';
+        } else {
+          (texture as any).encoding = (THREE as any).sRGBEncoding;
+        }
+      } else {
+        if ('colorSpace' in texture) {
+          (texture as any).colorSpace = 'srgb-linear';
+        } else {
+          (texture as any).encoding = (THREE as any).LinearEncoding;
+        }
+      }
 
       setPbrTextures(prev => ({ ...prev, [mapType]: texture }));
 
@@ -875,7 +911,11 @@ export default function App() {
       const loadTex = (url: string, srgb: boolean) => new Promise<THREE.Texture>((resolve, reject) => {
         new THREE.TextureLoader().load(url, (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
-          t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+          if ('colorSpace' in t) {
+            (t as any).colorSpace = srgb ? 'srgb' : 'srgb-linear';
+          } else {
+            (t as any).encoding = srgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
+          }
           t.flipY = false;
           resolve(t);
         }, undefined, reject);
@@ -1015,8 +1055,12 @@ export default function App() {
               dt.repeat.set(scl, scl);
               dt.needsUpdate = true;
               mat.map = dt;
+              // Always use white as color multiplier so diffuse map renders correctly
+              mat.color.set(0xffffff);
+              mat.color.multiplyScalar(bright);
             } else {
               mat.map = null;
+              mat.color.setRGB(bright, bright, bright);
             }
             if (normTex) {
               const nt = normTex.clone();
@@ -1037,7 +1081,6 @@ export default function App() {
               mat.roughnessMap = null;
             }
 
-            mat.color.setRGB(bright, bright, bright);
             mat.normalScale.set(bmp, bmp);
 
             mat.sheen = shn;
@@ -1230,7 +1273,11 @@ export default function App() {
         if (!ctx) return tex;
         ctx.drawImage(img, 0, 0, w, h);
         const baked = new THREE.CanvasTexture(canvas);
-        baked.encoding = tex.encoding;
+        if ('colorSpace' in baked) {
+          (baked as any).colorSpace = (tex as any).colorSpace ?? 'srgb-linear';
+        } else {
+          (baked as any).encoding = (tex as any).encoding;
+        }
         baked.wrapS = tex.wrapS; baked.wrapT = tex.wrapT;
         baked.repeat.copy(tex.repeat); baked.offset.copy(tex.offset);
         baked.flipY = tex.flipY; baked.needsUpdate = true;
