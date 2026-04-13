@@ -39,16 +39,24 @@ const FABRIC_PRESETS = [
   },
 ];
 
-// FAST GPU-Accelerated Greyscale
-function makeGreyscaleTex(origTex: THREE.Texture) {
+// FAST GPU-Accelerated Greyscale - FIXED: Added null checks and validation
+function makeGreyscaleTex(origTex: THREE.Texture): THREE.Texture | null {
   if (!origTex || !origTex.image) return null;
   try {
     const img = origTex.image;
-    const w = img.width || img.naturalWidth || img.videoWidth || 512;
-    const h = img.height || img.naturalHeight || img.videoHeight || 512;
+    
+    // Wait for image to be fully loaded
+    if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+      console.warn("Image not fully loaded, skipping greyscale conversion");
+      return null;
+    }
+    
+    const w = img.naturalWidth || img.width || 512;
+    const h = img.naturalHeight || img.height || 512;
     
     const c = document.createElement('canvas');
-    c.width = w; c.height = h;
+    c.width = w; 
+    c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) return null;
     
@@ -56,18 +64,15 @@ function makeGreyscaleTex(origTex: THREE.Texture) {
     ctx.drawImage(img, 0, 0, w, h);
 
     const t = new THREE.CanvasTexture(c);
-    // Support both old (.encoding) and new (.colorSpace) Three.js API
-    if ('colorSpace' in origTex) {
-      (t as any).colorSpace = (origTex as any).colorSpace;
-    } else {
-      (t as any).encoding = (origTex as any).encoding;
-    }
-    t.wrapS = origTex.wrapS; t.wrapT = origTex.wrapT;
-    t.repeat.copy(origTex.repeat); t.offset.copy(origTex.offset);
+    t.encoding = origTex.encoding || THREE.sRGBEncoding;
+    t.wrapS = origTex.wrapS || THREE.RepeatWrapping; 
+    t.wrapT = origTex.wrapT || THREE.RepeatWrapping;
+    if (origTex.repeat) t.repeat.copy(origTex.repeat);
+    if (origTex.offset) t.offset.copy(origTex.offset);
     if (origTex.flipY !== undefined) t.flipY = origTex.flipY;
-    t.anisotropy = origTex.anisotropy;
+    t.anisotropy = origTex.anisotropy || 16;
     if (origTex.center) t.center.copy(origTex.center);
-    t.rotation = origTex.rotation;
+    if (origTex.rotation !== undefined) t.rotation = origTex.rotation;
     t.needsUpdate = true;
     return t;
   } catch (e) {
@@ -101,12 +106,8 @@ function tryLoadTexture(url: string, isSrgb: boolean): Promise<THREE.Texture> {
       url,
       (tex) => {
         tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-        // Support both Three.js r152+ (.colorSpace) and older (.encoding)
-        if ('colorSpace' in tex) {
-          (tex as any).colorSpace = isSrgb ? 'srgb' : 'srgb-linear';
-        } else {
-          (tex as any).encoding = isSrgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
-        }
+        tex.encoding = isSrgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
+        tex.anisotropy = 16;
         texCache[url] = tex;
         resolve(tex);
       },
@@ -168,11 +169,6 @@ export default function App() {
   const [hasModel, setHasModel] = useState(false);
   
   const [meshEntries, setMeshEntries] = useState<MeshEntry[]>([]);
-  // Ref mirror so async callbacks (exportGLB) always read the latest entries,
-  // not a stale closure snapshot.
-  const meshEntriesRef = useRef<MeshEntry[]>([]);
-  // Keep ref in sync whenever state updates
-  useEffect(() => { meshEntriesRef.current = meshEntries; }, [meshEntries]);
   
   const [pbrTextures, setPbrTextures] = useState<{
     map: THREE.Texture | null;
@@ -200,7 +196,7 @@ export default function App() {
   const [polyLoading, setPolyLoading] = useState(false);
   const [selectedPolyFabric, setSelectedPolyFabric] = useState<string | null>(null);
   const [fabricTab, setFabricTab] = useState<'custom' | 'polyhaven'>('custom');
-  const [activeFabricName, setActiveFabricName] = useState<string>(''); // tracks the last applied fabric label
+  const [activeFabricName, setActiveFabricName] = useState<string>('');
 
   // Three.js refs
   const sceneRef = useRef(new THREE.Scene());
@@ -233,50 +229,19 @@ export default function App() {
     
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(window.devicePixelRatio);
-    // Support both Three.js r152+ and older API
-    if ('outputColorSpace' in renderer) {
-      (renderer as any).outputColorSpace = 'srgb';
-    } else {
-      (renderer as any).outputEncoding = (THREE as any).sRGBEncoding;
-    }
-    if ('useLegacyLights' in renderer) {
-      (renderer as any).useLegacyLights = false;
-    } else {
-      (renderer as any).physicallyCorrectLights = true;
-    }
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.physicallyCorrectLights = true;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-// 1. Match the exact exposure from the business side
     renderer.toneMappingExposure = 1.2; 
     viewerRef.current.appendChild(renderer.domElement);
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
     rendererRef.current = renderer;
-
-    // clientWidth/Height are 0 synchronously in useEffect — flex layout isn't
-    // resolved yet. Use double-RAF so size is set after the browser has painted.
-    const doInitialResize = () => {
-      if (!viewerRef.current || !rendererRef.current) return;
-      const el = viewerRef.current;
-      const rect = el.getBoundingClientRect();
-      const w = rect.width || el.clientWidth || el.offsetWidth;
-      const h = rect.height || el.clientHeight || el.offsetHeight;
-      if (w > 0 && h > 0) {
-        rendererRef.current.setSize(w, h, false);
-        cameraRef.current.aspect = w / h;
-        cameraRef.current.updateProjectionMatrix();
-      }
-    };
-    requestAnimationFrame(() => requestAnimationFrame(doInitialResize));
 
     const scene = sceneRef.current;
     
-    // 2. Add the Room Environment for photorealistic PBR reflections
     const pmremGenerator = new THREE.PMREMGenerator(renderer);
     pmremGenerator.compileEquirectangularShader();
     scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
 
-    // 3. Match the exact simple lighting from the business side
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
     const dirLight = new THREE.DirectionalLight(0xfff8f0, 2.5);
     dirLight.position.set(3, 5, 4);
@@ -332,11 +297,10 @@ export default function App() {
     viewerEl.addEventListener('contextmenu', handleContextMenu);
     viewerEl.addEventListener('wheel', handleWheel, { passive: false });
 
-    const resizeObserver = new ResizeObserver((entries) => {
+    const resizeObserver = new ResizeObserver(() => {
       if (!viewerEl || !rendererRef.current) return;
       const w = viewerEl.clientWidth;
       const h = viewerEl.clientHeight;
-      if (w === 0 || h === 0) return; // guard against zero-size
       rendererRef.current.setSize(w, h, false);
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
@@ -415,7 +379,6 @@ export default function App() {
           thumb: `https://cdn.polyhaven.com/asset_img/thumbs/${id}.png?width=128&height=128`,
         }));
 
-        // Validate thumbnails in parallel — only show fabrics whose image loads
         const checkThumb = (url: string): Promise<boolean> =>
           new Promise(resolve => {
             const img = new Image();
@@ -424,13 +387,12 @@ export default function App() {
             img.src = url;
           });
 
-        // Check in batches of 20 to avoid hammering CDN
         const valid: PolyFabric[] = [];
         for (let i = 0; i < candidates.length; i += 20) {
           const batch = candidates.slice(i, i + 20);
           const results = await Promise.all(batch.map(f => checkThumb(f.thumb)));
           batch.forEach((f, j) => { if (results[j]) valid.push(f); });
-          setPolyFabrics([...valid]); // stream in as we validate
+          setPolyFabrics([...valid]);
         }
       } catch (e) {
         console.warn('Polyhaven API unavailable');
@@ -443,23 +405,19 @@ export default function App() {
 
   const [polyVariantModal, setPolyVariantModal] = useState<{ fabric: PolyFabric; files: any } | null>(null);
 
-  // Colour variant key names used by Polyhaven for multi-colour assets
   const POLY_DIFF_KEYS = ['Diffuse', 'diff', 'Color', 'col1', 'col2', 'col3', 'coll1', 'coll2', 'coll3'];
   const POLY_NORM_KEYS = ['nor_gl', 'Normal', 'nor_dx', 'nor', 'Nor_GL', 'NormalGL'];
   const POLY_ROUGH_KEYS = ['Rough', 'rough', 'Roughness', 'roughness'];
 
   const pickUrl = (files: any, keys: string[]): string | null => {
-    // Normalise all file keys to lowercase-no-space for comparison
     const normalise = (s: string) => s.toLowerCase().replace(/[\s_-]/g, '');
     const fileKeys = Object.keys(files);
     for (const key of keys) {
-      // 1. Exact match first
       if (files[key]) {
         const mapData = files[key];
         const url = mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url || null;
         if (url) return url;
       }
-      // 2. Case-insensitive + ignore spaces/underscores match
       const normKey = normalise(key);
       const matched = fileKeys.find(k => normalise(k) === normKey);
       if (matched && files[matched]) {
@@ -470,18 +428,16 @@ export default function App() {
     return null;
   };
 
-  // Returns all diffuse colour variant entries found in a files object
   const getColourVariants = (files: any, fabricId: string): PolyFabricVariant[] => {
     const variants: PolyFabricVariant[] = [];
     const normalise = (s: string) => s.toLowerCase().replace(/[\s_-]/g, '');
 
-    // Patterns that indicate a colour/diffuse map (case-insensitive, space-tolerant)
     const isDiffuseKey = (k: string): boolean => {
       const n = normalise(k);
       return (
         n === 'diffuse' || n === 'diff' || n === 'color' || n === 'colour' ||
-        /^col\d+$/.test(n) ||    // col1, col2, col03 etc.
-        /^coll\d+$/.test(n)      // coll1, coll2 etc.
+        /^col\d+$/.test(n) ||
+        /^coll\d+$/.test(n)
       );
     };
 
@@ -491,20 +447,17 @@ export default function App() {
       const url = mapData?.['1k']?.jpg?.url || mapData?.['2k']?.jpg?.url;
       if (!url) continue;
 
-      // Build a clean human label from the raw key
       const n = normalise(key);
       let label: string;
       if (n === 'diffuse' || n === 'diff' || n === 'color' || n === 'colour') {
         label = 'Default';
       } else {
-        // Extract trailing digits: "col1"→"1", "coll03"→"03", "col 2"→"2"
         const num = n.replace(/^coll?/, '');
-        label = `Colour ${parseInt(num, 10)}`; // parseInt strips leading zero: "03"→3
+        label = `Colour ${parseInt(num, 10)}`;
       }
       variants.push({ key, label, diffUrl: url });
     }
 
-    // Sort by label so Default first, then Colour 1, 2, 3 ...
     variants.sort((a, b) => {
       if (a.label === 'Default') return -1;
       if (b.label === 'Default') return 1;
@@ -528,18 +481,15 @@ export default function App() {
       });
       const files = await filesRes.json();
 
-      // Detect colour variants
       const variants = getColourVariants(files, fabric.id);
       const hasVariants = variants.length > 1;
 
-      // If multi-variant and no specific variant chosen yet, show picker modal
       if (hasVariants && !variantDiffUrl) {
         setPolyVariantModal({ fabric, files });
         setLoading(false);
         return;
       }
 
-      // Resolve diffuse URL: use chosen variant or first available
       const diffUrl = variantDiffUrl || pickUrl(files, POLY_DIFF_KEYS);
       const normUrl = pickUrl(files, POLY_NORM_KEYS);
       const roughUrl = pickUrl(files, POLY_ROUGH_KEYS);
@@ -548,12 +498,9 @@ export default function App() {
         new Promise((resolve, reject) => {
           new THREE.TextureLoader().load(url, (t) => {
             t.wrapS = t.wrapT = THREE.RepeatWrapping;
-            if ('colorSpace' in t) {
-              (t as any).colorSpace = srgb ? 'srgb' : 'srgb-linear';
-            } else {
-              (t as any).encoding = srgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
-            }
+            t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
             t.flipY = false;
+            t.anisotropy = 16;
             resolve(t);
           }, undefined, reject);
         });
@@ -573,14 +520,18 @@ export default function App() {
         next.forEach(entry => {
           if (!entry.checked) return;
           const mat = entry.greyMat;
+          
+          // FIXED: Ensure color is never black - set to white before applying texture
+          mat.color.setRGB(1, 1, 1);
+          
           if (diffTex) {
             const dt = diffTex.clone();
             dt.repeat.set(texScale, texScale);
             dt.needsUpdate = true;
             mat.map = dt;
-            // White color multiplier so diffuse texture renders correctly
-            mat.color.set(0xffffff);
-            mat.color.multiplyScalar(brightness);
+            mat.color.setRGB(brightness, brightness, brightness);
+          } else {
+            mat.map = null;
           }
           if (normTex) {
             const nt = normTex.clone();
@@ -610,7 +561,6 @@ export default function App() {
     }
   };
 
-
   const onGLBBuffer = (arrayBuffer: ArrayBuffer) => {
     const loader = new GLTFLoader();
     const dracoLoader = new DRACOLoader();
@@ -627,7 +577,6 @@ export default function App() {
         const sz = box.getSize(new THREE.Vector3());
         const sc = 1.6 / Math.max(sz.x, sz.y, sz.z);
         currentModel.scale.setScalar(sc);
-        // Re-compute center AFTER scale is applied
         const box2 = new THREE.Box3().setFromObject(currentModel);
         const ctr = box2.getCenter(new THREE.Vector3());
         currentModel.position.sub(ctr);
@@ -645,49 +594,63 @@ export default function App() {
           if (!(child as THREE.Mesh).isMesh) return;
           const mesh = child as THREE.Mesh;
 
-          // CRITICAL: Always normalize to a material array so each slot
-          // can be swapped independently without touching sibling entries.
+          // FIXED: Better handling of materials
+          let materials: THREE.Material[] = [];
           if (!Array.isArray(mesh.material)) {
-            mesh.material = [mesh.material];
+            if (mesh.material) {
+              materials = [mesh.material];
+            } else {
+              // Create a default material if none exists
+              materials = [new THREE.MeshStandardMaterial({ color: 0xcccccc })];
+            }
             // When converting to array, Three.js needs at least one geometry group
-            // covering the whole mesh, otherwise nothing renders.
             if (mesh.geometry.groups.length === 0) {
               const count = mesh.geometry.index
                 ? mesh.geometry.index.count
                 : mesh.geometry.attributes.position.count;
               mesh.geometry.addGroup(0, count, 0);
             }
+          } else {
+            materials = mesh.material as THREE.Material[];
           }
-          const materials = mesh.material as THREE.Material[];
+          
+          // Ensure mesh.material is the array
+          mesh.material = materials;
 
           materials.forEach((origMat: any, index) => {
+            // Safety check for valid material
+            if (!origMat) {
+              origMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
+            }
+
             // Build greyMat — the material used when a part is selected/configured.
-            // Always starts visible with a neutral warm grey.
+            // FIXED: Always ensure visible color and no unintended transparency
             const greyMat = new THREE.MeshPhysicalMaterial({
-              color: new THREE.Color(0xc8c0b8),  // warm grey — visible without any map
+              color: new THREE.Color(0xc8c0b8),
               roughness: 0.75,
               metalness: 0.0,
               side: THREE.DoubleSide,
               sheen: 0,
+              transparent: false,
+              opacity: 1.0,
             });
             greyMat.sheenRoughness = 0.5;
 
-            // Preserve transparency if the original material uses it
-            if (origMat.transparent) {
+            // Copy original material properties safely
+            if (origMat.transparent && origMat.opacity > 0 && origMat.opacity < 1) {
               greyMat.transparent = true;
-              greyMat.opacity = origMat.opacity ?? 1;
+              greyMat.opacity = origMat.opacity;
               greyMat.alphaTest = origMat.alphaTest ?? 0;
             }
 
-            // Copy origMat color only if it is a visible (non-black) color.
-            // Do NOT copy if it is white — white + DoubleSide + env = blown out.
-            if (origMat.color) {
+            // FIXED: Safer color copying with validation
+            if (origMat.color && origMat.color.isColor) {
               const c = origMat.color;
               const brightness = c.r + c.g + c.b;
-              if (brightness > 0.1 && brightness < 2.9) {
+              // Only copy if it's a visible color (not too dark, not pure white to avoid blowout)
+              if (brightness > 0.2 && brightness < 2.9) {
                 greyMat.color.copy(c);
               }
-              // else keep the default 0xc8c0b8 grey
             }
 
             // Copy normal/roughness/metalness maps from origMat
@@ -699,19 +662,29 @@ export default function App() {
             if (origMat.metalnessMap) greyMat.metalnessMap = origMat.metalnessMap;
 
             // Greyscale the diffuse map if present; fall back to original map.
-            // If no map exists (cushions use plain PBR color), keep the grey color.
             let origGreyscaleMap: THREE.Texture | null = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
-              greyMat.map = origGreyscaleMap ?? origMat.map;
-              // Use white so the greyscale map renders at its own brightness
-              greyMat.color.set(0xffffff);
+              if (origGreyscaleMap) {
+                greyMat.map = origGreyscaleMap;
+                greyMat.color.set(0xd4d0cc);
+              } else {
+                // FIXED: If greyscale fails, use original texture but ensure color is light
+                greyMat.map = origMat.map;
+                greyMat.color.set(0xd4d0cc);
+              }
             }
-            // No map → greyMat.color stays as the warm grey set above
+            // No map → greyMat.color stays as set above
+
+            // FIXED: Ensure color is never black/transparent
+            const finalColor = greyMat.color;
+            if (finalColor.r === 0 && finalColor.g === 0 && finalColor.b === 0) {
+              greyMat.color.set(0xc8c0b8);
+            }
 
             greyMat.needsUpdate = true;
 
-            // ── NAMING: GLB node name first, spatial heuristic fallback ──
+            // Naming logic...
             const KNOWN_PARTS: Record<string, string> = {
               'wooden frame': 'Wooden Frame',
               'seat cushion': 'Seat Cushion',
@@ -741,39 +714,23 @@ export default function App() {
             const dims    = [ms.x, ms.y, ms.z].sort((a, b) => a - b);
             const flatness = dims[2] > 0 ? dims[0] / dims[2] : 1;
 
-            // 1. Legs / base
             if (cleanName) { /* GLB name found — skip heuristic */ }
             else if (relY < -0.55) {
               cleanName = 'Legs / Base';
-
-            // 2. Backrest — high Z (rear), upper half of model
             } else if (relZ < -0.35 && relY > -0.3) {
               cleanName = 'Backrest';
-
-            // 3. Armrests — far left or right, mid height
             } else if (absX > 0.55 && relY > -0.4) {
               cleanName = relX > 0 ? 'Right Armrest' : 'Left Armrest';
-
-            // 4. Seat cushion — front-centre, middle height
             } else if (relZ > 0.0 && relY > -0.3 && relY < 0.4 && absX < 0.5) {
               cleanName = 'Seat Cushion';
-
-            // 5. Stitching / seam — very flat or very small volume
             } else if (flatness < 0.06 || volRatio < 0.0008) {
               cleanName = 'Stitching';
-
-            // 6. Legs ambiguous — low Y but not caught above
             } else if (relY < -0.35 && volRatio < 0.02) {
               cleanName = 'Legs / Base';
-
-            // 7. Large central body
             } else if (volRatio > 0.12) {
               cleanName = 'Main Body';
-
-            // 8. Mid-body panels
             } else if (relY > -0.1 && relY < 0.55 && absX < 0.55) {
               cleanName = 'Body Panel';
-
             } else {
               cleanName = 'Frame';
             }
@@ -798,7 +755,6 @@ export default function App() {
         });
 
         setMeshEntries(() => {
-          // Deduplicate names: if multiple entries share the same name, append a number
           const nameCounts: Record<string, number> = {};
           const nameIndex: Record<string, number> = {};
           newEntries.forEach(e => { nameCounts[e.name] = (nameCounts[e.name] || 0) + 1; });
@@ -858,20 +814,10 @@ export default function App() {
       texture.wrapS = THREE.RepeatWrapping;
       texture.wrapT = THREE.RepeatWrapping;
       texture.flipY = false;
+      texture.anisotropy = 16;
 
-      if (mapType === 'map') {
-        if ('colorSpace' in texture) {
-          (texture as any).colorSpace = 'srgb';
-        } else {
-          (texture as any).encoding = (THREE as any).sRGBEncoding;
-        }
-      } else {
-        if ('colorSpace' in texture) {
-          (texture as any).colorSpace = 'srgb-linear';
-        } else {
-          (texture as any).encoding = (THREE as any).LinearEncoding;
-        }
-      }
+      if (mapType === 'map') texture.encoding = THREE.sRGBEncoding;
+      else texture.encoding = THREE.LinearEncoding;
 
       setPbrTextures(prev => ({ ...prev, [mapType]: texture }));
 
@@ -887,7 +833,11 @@ export default function App() {
             clonedTex.needsUpdate = true;
             
             entry.greyMat[mapType] = clonedTex;
-            if (mapType === 'map') entry.greyMat.color.setHex(0xffffff); 
+            
+            // FIXED: When applying diffuse map, ensure color is white (not black)
+            if (mapType === 'map') {
+              entry.greyMat.color.setHex(0xffffff);
+            }
             if (mapType === 'normalMap') entry.greyMat.normalScale = new THREE.Vector2(normScale, normScale);
             entry.greyMat.needsUpdate = true;
             applied++;
@@ -911,7 +861,8 @@ export default function App() {
       next.forEach(entry => {
         if (!entry.checked) return;
         entry.greyMat.map = null;
-        entry.greyMat.color.copy(color).multiplyScalar(brightness);
+        // FIXED: Ensure we're setting a visible color with proper brightness
+        entry.greyMat.color.copy(color).multiplyScalar(Math.max(0.01, brightness));
         entry.greyMat.needsUpdate = true;
       });
       return next;
@@ -936,12 +887,9 @@ export default function App() {
       const loadTex = (url: string, srgb: boolean) => new Promise<THREE.Texture>((resolve, reject) => {
         new THREE.TextureLoader().load(url, (t) => {
           t.wrapS = t.wrapT = THREE.RepeatWrapping;
-          if ('colorSpace' in t) {
-            (t as any).colorSpace = srgb ? 'srgb' : 'srgb-linear';
-          } else {
-            (t as any).encoding = srgb ? (THREE as any).sRGBEncoding : (THREE as any).LinearEncoding;
-          }
+          t.encoding = srgb ? THREE.sRGBEncoding : THREE.LinearEncoding;
           t.flipY = false;
+          t.anisotropy = 16;
           resolve(t);
         }, undefined, reject);
       });
@@ -965,6 +913,12 @@ export default function App() {
         next.forEach(entry => {
           if (!entry.checked) return;
           const mat = entry.greyMat;
+          
+          // FIXED: Ensure base color is visible (not black)
+          if (!mat.map) {
+            mat.color.setRGB(0.9, 0.9, 0.9);
+          }
+          
           if (normTex) {
             const nt = normTex.clone();
             nt.repeat.set(texScale, texScale);
@@ -994,26 +948,29 @@ export default function App() {
     }
   };
 
-
   const toggleMeshCheck = (id: string, checked: boolean) => {
     setMeshEntries(prev => prev.map(entry => {
       if (entry.id !== id) return entry;
       
       const newEntry = { ...entry, checked };
       
-      // Always use indexed assignment — mesh.material is always an array now
+      // Ensure material array exists
+      if (!Array.isArray(newEntry.mesh.material)) {
+        newEntry.mesh.material = [newEntry.mesh.material];
+      }
+      
       const matArray = [...(newEntry.mesh.material as THREE.Material[])];
-      // BUG FIX 1: When checking, swap to greyMat as-is — DO NOT overwrite its
-      // textures. Each greyMat already holds whatever fabric was last applied to
-      // it via applyFabric/applyPolyFabric. Overwriting here was causing previously
-      // applied fabrics to be replaced by the global pbrTextures state.
-      matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
-      newEntry.mesh.material = matArray;
+      
+      // Safety check for matIndex
+      if (newEntry.matIndex >= 0 && newEntry.matIndex < matArray.length) {
+        matArray[newEntry.matIndex] = checked ? newEntry.greyMat : newEntry.origMat;
+        newEntry.mesh.material = matArray;
+      }
 
-      // Flash emissive highlight so user can see exactly which part got selected
+      // Flash emissive highlight
       if (checked) {
-        newEntry.greyMat.emissive = new THREE.Color(0x888800);
-        newEntry.greyMat.emissiveIntensity = 0.4;
+        newEntry.greyMat.emissive = new THREE.Color(0x666600);
+        newEntry.greyMat.emissiveIntensity = 0.3;
         newEntry.greyMat.needsUpdate = true;
         setTimeout(() => {
           newEntry.greyMat.emissive = new THREE.Color(0x000000);
@@ -1026,7 +983,6 @@ export default function App() {
     }));
   };
 
-  // Apply Fabric with Smart Auto-Discovery
   const applyFabric = async (idx: number) => {
     const fabric = fabricLibrary[idx];
     const hasChecked = meshEntries.some(e => e.checked);
@@ -1040,7 +996,6 @@ export default function App() {
     setLoadingMsg('Applying Textures...');
     
     try {
-      // Automatically find the correct extension for each map type
       const [diffRes, normRes, roughRes] = await Promise.all([
         loadTextureWithFallbacks(fabric.folder, 'BaseColor', true),
         loadTextureWithFallbacks(fabric.folder, 'Normal', false),
@@ -1051,7 +1006,6 @@ export default function App() {
       const normTex = normRes.tex;
       const roughTex = roughRes.tex;
 
-      // Pull defaults defined in fabricLibrary
       const bright = fabric.defaults.brightness !== undefined ? fabric.defaults.brightness : 1.0;
       const shn = fabric.defaults.sheen !== undefined ? fabric.defaults.sheen : 0.0;
       const rgh = fabric.defaults.roughness !== undefined ? fabric.defaults.roughness : 0.7;
@@ -1059,7 +1013,6 @@ export default function App() {
       const scl = fabric.defaults.scale !== undefined ? fabric.defaults.scale : 3.0;
       const bmp = fabric.defaults.bump !== undefined ? fabric.defaults.bump : 1.0;
 
-      // Update UI Sliders to Preset Defaults
       setBrightness(bright);
       setSheen(shn);
       setRoughness(rgh);
@@ -1067,25 +1020,23 @@ export default function App() {
       setTexScale(scl);
       setNormScale(bmp);
 
-      // Apply textures to scale — clone per entry so each mesh has its own repeat
       setMeshEntries(prev => {
         const next = [...prev];
         next.forEach(entry => {
           if (entry.checked) {
             const mat = entry.greyMat;
 
+            // FIXED: Ensure we start with a visible base
+            mat.color.setRGB(1, 1, 1);
+            
             if (diffTex) {
               const dt = diffTex.clone();
               dt.wrapS = dt.wrapT = THREE.RepeatWrapping;
               dt.repeat.set(scl, scl);
               dt.needsUpdate = true;
               mat.map = dt;
-              // Always use white as color multiplier so diffuse map renders correctly
-              mat.color.set(0xffffff);
-              mat.color.multiplyScalar(bright);
             } else {
               mat.map = null;
-              mat.color.setRGB(bright, bright, bright);
             }
             if (normTex) {
               const nt = normTex.clone();
@@ -1106,6 +1057,7 @@ export default function App() {
               mat.roughnessMap = null;
             }
 
+            mat.color.setRGB(bright, bright, bright);
             mat.normalScale.set(bmp, bmp);
 
             mat.sheen = shn;
@@ -1132,8 +1084,10 @@ export default function App() {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
-        const baseColor = new THREE.Color(pbrTextures.map ? 0xffffff : 0xffffff);
-        baseColor.multiplyScalar(val);
+        // FIXED: Ensure minimum brightness to avoid black
+        const safeVal = Math.max(0.01, val);
+        const baseColor = new THREE.Color(pbrTextures.map ? 0xffffff : baseColorHex ? new THREE.Color(baseColorHex) : 0xffffff);
+        baseColor.multiplyScalar(safeVal);
         entry.greyMat.color.copy(baseColor);
         entry.greyMat.needsUpdate = true;
       });
@@ -1200,7 +1154,6 @@ export default function App() {
   };
 
   const resetToDefault = async () => {
-    // Reset all UI state
     setRoughness(defaultProperties.roughness);
     setMetalness(defaultProperties.metalness);
     setSheen(defaultProperties.sheen);
@@ -1213,7 +1166,6 @@ export default function App() {
     setMeshEntries([]);
     setHasModel(false);
 
-    // Reload default model
     try {
       setLoading(true);
       setLoadingMsg('Reloading Default Sofa...');
@@ -1237,7 +1189,6 @@ export default function App() {
       setLoadingMsg("Rendering in living room...");
       setLoading(true);
 
-      // Render the scene to the canvas before capturing
       rendererRef.current.render(sceneRef.current, cameraRef.current);
       const canvas = rendererRef.current.domElement;
       const dataUrl = canvas.toDataURL('image/png');
@@ -1282,12 +1233,8 @@ export default function App() {
     setLoading(true);
     setLoadingMsg("Preparing export...");
 
-    // ── helpers ──────────────────────────────────────────────────────────
-
-    // Bake an HTMLImageElement texture onto a canvas so GLTFExporter can embed it
     const bakeTexIfNeeded = (tex: THREE.Texture | null): THREE.Texture | null => {
       if (!tex || !tex.image) return tex;
-      if (tex.image instanceof HTMLCanvasElement) return tex;
       try {
         const img = tex.image as HTMLImageElement;
         const w = img.naturalWidth || img.width || 512;
@@ -1298,11 +1245,7 @@ export default function App() {
         if (!ctx) return tex;
         ctx.drawImage(img, 0, 0, w, h);
         const baked = new THREE.CanvasTexture(canvas);
-        if ('colorSpace' in baked) {
-          (baked as any).colorSpace = (tex as any).colorSpace ?? 'srgb-linear';
-        } else {
-          (baked as any).encoding = (tex as any).encoding;
-        }
+        baked.encoding = tex.encoding;
         baked.wrapS = tex.wrapS; baked.wrapT = tex.wrapT;
         baked.repeat.copy(tex.repeat); baked.offset.copy(tex.offset);
         baked.flipY = tex.flipY; baked.needsUpdate = true;
@@ -1310,7 +1253,6 @@ export default function App() {
       } catch (e) { return tex; }
     };
 
-    // Export a Three.js Texture to a PNG Blob via canvas
     const texToBlob = (tex: THREE.Texture | null): Promise<Blob | null> => {
       if (!tex || !tex.image) return Promise.resolve(null);
       return new Promise(resolve => {
@@ -1328,33 +1270,22 @@ export default function App() {
       });
     };
 
-    // ── bake textures for GLTFExporter ────────────────────────────────────
-    // Use ref (not state) to get latest entries — avoids stale closure bug.
-    const currentEntries = meshEntriesRef.current;
-
     const bakedPairs: Array<{
-      mat: any;
+      mat: THREE.MeshPhysicalMaterial;
       origMap: THREE.Texture | null;
       origNorm: THREE.Texture | null;
       origRough: THREE.Texture | null;
     }> = [];
 
-    // BUG FIX: Bake ALL entries not just checked ones.
-    // The exporter walks the entire scene. Unchecked parts still have origMat on the
-    // mesh, which often has HTMLImageElement textures GLTFExporter can't serialize —
-    // it silently drops them, producing a GLB with missing/broken materials.
-    currentEntries.forEach(entry => {
-      const matArray = entry.mesh.material as THREE.Material[];
-      const activeMat = matArray[entry.matIndex] as any;
-      if (!activeMat) return;
-      const origMap   = activeMat.map           ?? null;
-      const origNorm  = activeMat.normalMap     ?? null;
-      const origRough = activeMat.roughnessMap  ?? null;
-      if (origMap)   activeMat.map          = bakeTexIfNeeded(origMap);
-      if (origNorm)  activeMat.normalMap    = bakeTexIfNeeded(origNorm);
-      if (origRough) activeMat.roughnessMap = bakeTexIfNeeded(origRough);
-      activeMat.needsUpdate = true;
-      bakedPairs.push({ mat: activeMat, origMap, origNorm, origRough });
+    meshEntries.forEach(entry => {
+      if (!entry.checked) return;
+      const mat = entry.greyMat;
+      const origMap = mat.map; const origNorm = mat.normalMap; const origRough = mat.roughnessMap;
+      mat.map = bakeTexIfNeeded(mat.map);
+      mat.normalMap = bakeTexIfNeeded(mat.normalMap);
+      mat.roughnessMap = bakeTexIfNeeded(mat.roughnessMap);
+      mat.needsUpdate = true;
+      bakedPairs.push({ mat, origMap, origNorm, origRough });
     });
 
     const restoreTextures = () => {
@@ -1364,27 +1295,20 @@ export default function App() {
       });
     };
 
-    // ── export GLB ────────────────────────────────────────────────────────
     setLoadingMsg("Exporting GLB...");
 
     const glbBlob: Blob = await new Promise((resolve, reject) => {
       const exporter = new GLTFExporter();
-      // Three.js r139 GLTFExporter.parse() signature is:
-      //   parse(input, onDone, options)   ← 3 args, NO onError parameter
-      // The app was incorrectly calling it with 4 args (input, onDone, onError, options),
-      // which meant { binary: true } was silently dropped → exporter produced JSON not binary.
       (exporter as any).parse(
         currentModelRef.current!,
-        (gltf: ArrayBuffer | object) => {
+        (gltf) => {
           restoreTextures();
-          if (gltf instanceof ArrayBuffer) {
-            resolve(new Blob([gltf], { type: 'model/gltf-binary' }));
-          } else {
-            // Should never happen with binary:true, but guard anyway
-            reject(new Error('GLTFExporter returned JSON instead of binary — check options'));
-          }
+          resolve(gltf instanceof ArrayBuffer
+            ? new Blob([gltf], { type: 'application/octet-stream' })
+            : new Blob([JSON.stringify(gltf)], { type: 'text/plain' }));
         },
-        { binary: true } as any   // ← options is the 3rd argument (was being passed as 4th)
+        (err) => { restoreTextures(); reject(err); },
+        { binary: true } as any
       );
     }).catch(err => {
       console.error(err);
@@ -1395,12 +1319,8 @@ export default function App() {
 
     if (!glbBlob) return;
 
-    // ── collect texture blobs ─────────────────────────────────────────────
     setLoadingMsg("Packing textures...");
-
-    const checkedEntries = currentEntries.filter(e => e.checked);
-    // Use the first checked entry's greyMat as representative for the loose texture files.
-    // (All checked parts share the same last-applied fabric textures.)
+    const checkedEntries = meshEntries.filter(e => e.checked);
     const repMat = checkedEntries[0]?.greyMat ?? null;
     const [diffBlob, normBlob, roughBlob] = await Promise.all([
       texToBlob(repMat?.map ?? null),
@@ -1408,7 +1328,6 @@ export default function App() {
       texToBlob(repMat?.roughnessMap ?? null),
     ]);
 
-    // ── build config.txt ──────────────────────────────────────────────────
     const timestamp = new Date().toISOString().replace('T', ' ').slice(0, 19);
     const partNames = checkedEntries.map(e => e.name).join(', ') || 'None';
     const fabricSource = fabricTab === 'polyhaven'
@@ -1455,10 +1374,8 @@ export default function App() {
 
     const configBlob = new Blob([configLines], { type: 'text/plain' });
 
-    // ── build ZIP ─────────────────────────────────────────────────────────
     setLoadingMsg("Building ZIP...");
 
-    // Load JSZip dynamically from CDN
     const JSZip = await (async () => {
       if ((window as any).JSZip) return (window as any).JSZip;
       await new Promise<void>((res, rej) => {
@@ -1539,15 +1456,12 @@ export default function App() {
       
       <div className="flex flex-1 overflow-hidden">
         
-        {/* Left Panel: Fabric & Color */}
         <div className="w-80 border-r border-gray-200 flex flex-col overflow-y-auto shrink-0 bg-white z-30">
           
-          {/* Fabric Library */}
           <div className="p-6 border-b border-gray-100">
             <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400 mb-5">Fabric Library</div>
             
             <div className="space-y-5">
-              {/* Base Color */}
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
                   <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Base Colour</span>
@@ -1559,7 +1473,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-                {/* Color swatch row + picker */}
                 <div className="flex items-center gap-3 mb-2">
                   {['#ffffff','#f5e6d3','#d4b896','#8b6f47','#4a3728','#2c2c2c','#e8d5c4','#c9a882','#7a9b8c','#5b7fa6','#8b4444','#6b5b8b'].map(c => (
                     <button
@@ -1586,7 +1499,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Fabric Type Presets (Normal + Roughness) */}
               <div>
                 <div className="flex items-center gap-1.5 mb-2">
                   <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Fabric Type</span>
@@ -1611,7 +1523,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Custom Override Maps */}
               <div className="pt-1">
                 <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Custom Override Maps</div>
                 <div className="space-y-2">
@@ -1630,10 +1541,7 @@ export default function App() {
             </div>
           </div>
 
-
-          {/* Fabric Selection — Tabbed: Custom | Polyhaven */}
           <div className="p-6">
-            {/* Tab switcher */}
             <div className="flex border border-gray-200 rounded overflow-hidden mb-4">
               <button
                 onClick={() => setFabricTab('custom')}
@@ -1698,11 +1606,8 @@ export default function App() {
             )}
           </div>
 
-
-
         </div>
         
-        {/* Center: Viewer */}
         <div 
           className="flex-1 relative bg-[#fafafa] cursor-grab active:cursor-grabbing"
           onDragOver={(e) => { e.preventDefault(); e.currentTarget.style.outline = '2px solid #000'; e.currentTarget.style.outlineOffset = '-4px'; }}
@@ -1748,10 +1653,8 @@ export default function App() {
           )}
         </div>
         
-        {/* Right Panel: Properties */}
         <div className="w-80 border-l border-gray-200 flex flex-col overflow-y-auto shrink-0 bg-white z-30">
           
-          {/* 1. Select Parts */}
           <div className="p-6 border-b border-gray-100 flex-1">
             <div className="flex items-center justify-between mb-4">
               <div className="text-[10px] font-bold tracking-widest uppercase text-gray-400">1. Select Parts</div>
@@ -1772,7 +1675,6 @@ export default function App() {
             {!hasModel && <div className="text-xs text-gray-400 italic">Load a GLB first</div>}
             <div className="flex flex-col gap-1.5">
               {meshEntries.map(entry => {
-                // Zone colour dot — gives instant visual cue about which region
                 const zoneColor: Record<string, string> = {
                   'Seat Cushion':    '#a78bfa',
                   'Backrest':        '#60a5fa',
@@ -1784,7 +1686,6 @@ export default function App() {
                   'Stitching':       '#94a3b8',
                   'Frame':           '#f97316',
                 };
-                // strip trailing number for lookup
                 const baseName = entry.name.replace(/ \d+$/, '');
                 const dot = zoneColor[baseName] || '#cbd5e1';
 
@@ -1793,11 +1694,9 @@ export default function App() {
                     key={entry.id}
                     className={`flex items-center gap-3 px-3 py-2.5 border rounded cursor-pointer transition-all select-none ${entry.checked ? 'border-black bg-gray-50 shadow-sm' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50/50'}`}
                     onMouseEnter={() => {
-                      // Brief emissive pulse on hover so user can preview which part in 3D
                       entry.greyMat.emissive = new THREE.Color(0x444400);
                       entry.greyMat.emissiveIntensity = 0.25;
                       entry.greyMat.needsUpdate = true;
-                      // Also pulse the original material if not checked
                       if (!entry.checked) {
                         const origAny = entry.origMat as any;
                         if (origAny.emissive !== undefined) {
@@ -1845,7 +1744,7 @@ export default function App() {
             <div className="space-y-6">
               <div className="flex items-center gap-4">
                 <label className="text-xs font-medium text-gray-600 w-20">Brightness</label>
-                <input type="range" min="0" max="2" step="0.05" value={brightness} onChange={(e) => updateBrightness(parseFloat(e.target.value))} className="flex-1 h-1 bg-gray-200 rounded appearance-none cursor-pointer accent-black" />
+                <input type="range" min="0.01" max="2" step="0.05" value={brightness} onChange={(e) => updateBrightness(parseFloat(e.target.value))} className="flex-1 h-1 bg-gray-200 rounded appearance-none cursor-pointer accent-black" />
                 <span className="text-xs font-medium text-gray-900 w-8 text-right tabular-nums">{brightness.toFixed(2)}</span>
               </div>
 
@@ -1912,7 +1811,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Polyhaven Colour Variant Picker Modal */}
       {polyVariantModal && (
         <div className="fixed inset-0 bg-black/60 z-[200] flex items-center justify-center p-6 backdrop-blur-sm">
           <div className="bg-white rounded-lg shadow-2xl w-full max-w-md">
