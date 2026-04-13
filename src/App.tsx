@@ -58,11 +58,9 @@ function makeGreyscaleTex(origTex: THREE.Texture): THREE.Texture | null {
     c.height = h;
     const ctx = c.getContext('2d');
     if (!ctx) return null;
-
-    // Fill opaque white background FIRST — critical fix for renderer.alpha:true.
-    // Without this, canvas pixels default to (0,0,0,0). THREE.js shader outputs
-    // gl_FragColor.a = textureAlpha. With alpha:true renderer, any pixel with
-    // alpha=0 is transparent and shows the white page background → mesh invisible.
+    
+    // Fill opaque white before drawing — prevents alpha=0 canvas pixels
+    // which would make fragments transparent with renderer.alpha:true
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, w, h);
     ctx.filter = 'grayscale(100%) brightness(1.2) contrast(1.1)';
@@ -628,65 +626,50 @@ export default function App() {
               origMat = new THREE.MeshStandardMaterial({ color: 0xcccccc });
             }
 
-            // Build greyMat — the material used when a part is selected/configured.
-            // FIXED: Always ensure visible color and no unintended transparency
-            const greyMat = new THREE.MeshPhysicalMaterial({
-              color: new THREE.Color(0xc8c0b8),
-              roughness: 0.75,
-              metalness: 0.0,
-              side: THREE.DoubleSide,
-              sheen: 0,
-              transparent: false,
-              opacity: 1.0,
-            });
-            greyMat.sheenRoughness = 0.5;
+            // Clone origMat instead of new MeshPhysicalMaterial.
+            // origMat is KNOWN to render correctly. A fresh MeshPhysicalMaterial
+            // silently fails in r128 with renderer.alpha:true (the physical shader
+            // can output gl_FragColor.a=0 making the mesh invisible against the
+            // white page background). Cloning preserves the working shader type.
+            const greyMat = origMat.clone() as THREE.MeshPhysicalMaterial;
 
-            // Copy original material properties safely
-            if (origMat.transparent && origMat.opacity > 0 && origMat.opacity < 1) {
-              greyMat.transparent = true;
-              greyMat.opacity = origMat.opacity;
-              greyMat.alphaTest = origMat.alphaTest ?? 0;
-            }
+            // Clear all maps — texture alpha channels would make fragments transparent
+            greyMat.color.set(0xd4d0cc);
+            greyMat.map            = null;
+            greyMat.normalMap      = null;
+            greyMat.roughnessMap   = null;
+            greyMat.metalnessMap   = null;
+            if ((greyMat as any).emissiveMap   !== undefined) (greyMat as any).emissiveMap   = null;
+            if ((greyMat as any).aoMap         !== undefined) (greyMat as any).aoMap         = null;
+            if ((greyMat as any).alphaMap      !== undefined) (greyMat as any).alphaMap      = null;
+            if ((greyMat as any).bumpMap       !== undefined) (greyMat as any).bumpMap       = null;
 
-            // FIXED: Safer color copying with validation
-            if (origMat.color && origMat.color.isColor) {
-              const c = origMat.color;
-              const brightness = c.r + c.g + c.b;
-              // Only copy if it's a visible color (not too dark, not pure white to avoid blowout)
-              if (brightness > 0.2 && brightness < 2.9) {
-                greyMat.color.copy(c);
-              }
-            }
+            // Force fully opaque
+            greyMat.transparent = false;
+            greyMat.opacity     = 1.0;
+            greyMat.alphaTest   = 0;
+            greyMat.depthWrite  = true;
+            greyMat.visible     = true;
+            greyMat.side        = THREE.DoubleSide;
+            greyMat.roughness   = 0.75;
+            greyMat.metalness   = 0.0;
+            if ((greyMat as any).emissive)           (greyMat as any).emissive.set(0x000000);
+            if ((greyMat as any).emissiveIntensity !== undefined) (greyMat as any).emissiveIntensity = 0;
+            if ((greyMat as any).sheen             !== undefined) (greyMat as any).sheen             = 0;
+            if ((greyMat as any).clearcoat         !== undefined) (greyMat as any).clearcoat         = 0;
+            if ((greyMat as any).transmission      !== undefined) (greyMat as any).transmission      = 0;
 
-            // Copy normal/roughness/metalness maps from origMat
-            if (origMat.normalMap) {
-              greyMat.normalMap = origMat.normalMap;
-              if (origMat.normalScale) greyMat.normalScale.copy(origMat.normalScale);
-            }
-            if (origMat.roughnessMap) greyMat.roughnessMap = origMat.roughnessMap;
-            if (origMat.metalnessMap) greyMat.metalnessMap = origMat.metalnessMap;
-
-            // Greyscale the diffuse map if present; fall back to original map.
+            // Optionally apply a greyscale version of the diffuse map.
+            // makeGreyscaleTex fills a white background first so the canvas is
+            // fully opaque (alpha=1). If conversion fails, greyMat stays solid grey
+            // which is always fully opaque with renderer.alpha:true.
             let origGreyscaleMap: THREE.Texture | null = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
               if (origGreyscaleMap) {
                 greyMat.map = origGreyscaleMap;
-                greyMat.color.set(0xd4d0cc);
-            } else {
-                // Greyscale failed — don't fall back to origMat.map.
-                // origMat.map may have alpha<1 pixels which, with renderer.alpha:true,
-                // would make fragments transparent/invisible. Solid grey is always safe.
-                greyMat.map = null;
-                greyMat.color.set(0xd4d0cc);
               }
-            }
-            // No map → greyMat.color stays as set above
-
-            // FIXED: Ensure color is never black/transparent
-            const finalColor = greyMat.color;
-            if (finalColor.r === 0 && finalColor.g === 0 && finalColor.b === 0) {
-              greyMat.color.set(0xc8c0b8);
+              // Failure: greyMat.map stays null (solid grey, always visible)
             }
 
             greyMat.needsUpdate = true;
