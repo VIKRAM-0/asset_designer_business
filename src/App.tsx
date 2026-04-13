@@ -248,23 +248,26 @@ export default function App() {
 // 1. Match the exact exposure from the business side
     renderer.toneMappingExposure = 1.2; 
     viewerRef.current.appendChild(renderer.domElement);
-    // Ensure canvas fills the container (critical for correct display)
     renderer.domElement.style.display = 'block';
     renderer.domElement.style.width = '100%';
     renderer.domElement.style.height = '100%';
     rendererRef.current = renderer;
 
-    // CRITICAL: Set initial renderer size immediately — ResizeObserver fires
-    // asynchronously so without this the canvas stays at 0×0 and renders nothing.
-    {
-      const w = viewerRef.current.clientWidth || viewerRef.current.offsetWidth;
-      const h = viewerRef.current.clientHeight || viewerRef.current.offsetHeight;
+    // clientWidth/Height are 0 synchronously in useEffect — flex layout isn't
+    // resolved yet. Use double-RAF so size is set after the browser has painted.
+    const doInitialResize = () => {
+      if (!viewerRef.current || !rendererRef.current) return;
+      const el = viewerRef.current;
+      const rect = el.getBoundingClientRect();
+      const w = rect.width || el.clientWidth || el.offsetWidth;
+      const h = rect.height || el.clientHeight || el.offsetHeight;
       if (w > 0 && h > 0) {
-        renderer.setSize(w, h, false);
+        rendererRef.current.setSize(w, h, false);
         cameraRef.current.aspect = w / h;
         cameraRef.current.updateProjectionMatrix();
       }
-    }
+    };
+    requestAnimationFrame(() => requestAnimationFrame(doInitialResize));
 
     const scene = sceneRef.current;
     
