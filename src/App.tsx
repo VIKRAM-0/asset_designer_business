@@ -614,13 +614,13 @@ export default function App() {
             // Build greyMat — the material used when a part is selected/configured.
             // Start with safe defaults so it is ALWAYS visible.
             const greyMat = new THREE.MeshPhysicalMaterial({
-              color: new THREE.Color(0xc8c0b8),   // neutral warm grey — always visible
+              color: new THREE.Color(0xc8c0b8),
               roughness: 0.7,
               metalness: 0.0,
-              side: THREE.DoubleSide,              // never cull back-faces
-              sheen: 0,                            // number 0-1, NOT a Color object
-              sheenRoughness: 0.5,
+              side: THREE.DoubleSide,
+              sheen: 0,
             });
+            greyMat.sheenRoughness = 0.5;
 
             // Copy material properties from origMat where they are meaningful
             if (origMat.roughness !== undefined) greyMat.roughness = origMat.roughness;
