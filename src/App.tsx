@@ -243,7 +243,23 @@ export default function App() {
 // 1. Match the exact exposure from the business side
     renderer.toneMappingExposure = 1.2; 
     viewerRef.current.appendChild(renderer.domElement);
+    // Ensure canvas fills the container (critical for correct display)
+    renderer.domElement.style.display = 'block';
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
     rendererRef.current = renderer;
+
+    // CRITICAL: Set initial renderer size immediately — ResizeObserver fires
+    // asynchronously so without this the canvas stays at 0×0 and renders nothing.
+    {
+      const w = viewerRef.current.clientWidth || viewerRef.current.offsetWidth;
+      const h = viewerRef.current.clientHeight || viewerRef.current.offsetHeight;
+      if (w > 0 && h > 0) {
+        renderer.setSize(w, h, false);
+        cameraRef.current.aspect = w / h;
+        cameraRef.current.updateProjectionMatrix();
+      }
+    }
 
     const scene = sceneRef.current;
     
@@ -308,10 +324,11 @@ export default function App() {
     viewerEl.addEventListener('contextmenu', handleContextMenu);
     viewerEl.addEventListener('wheel', handleWheel, { passive: false });
 
-    const resizeObserver = new ResizeObserver(() => {
+    const resizeObserver = new ResizeObserver((entries) => {
       if (!viewerEl || !rendererRef.current) return;
       const w = viewerEl.clientWidth;
       const h = viewerEl.clientHeight;
+      if (w === 0 || h === 0) return; // guard against zero-size
       rendererRef.current.setSize(w, h, false);
       cameraRef.current.aspect = w / h;
       cameraRef.current.updateProjectionMatrix();
