@@ -45,14 +45,13 @@ function makeGreyscaleTex(origTex: THREE.Texture): THREE.Texture | null {
   try {
     const img = origTex.image;
     
-    // Wait for image to be fully loaded
-    if (img.naturalWidth === 0 || img.naturalHeight === 0) {
+    const w = img.naturalWidth || img.width || (img instanceof ImageBitmap ? img.width : 0) || 512;
+    const h = img.naturalHeight || img.height || (img instanceof ImageBitmap ? img.height : 0) || 512;
+    
+    if (w === 0 || h === 0) {
       console.warn("Image not fully loaded, skipping greyscale conversion");
       return null;
     }
-    
-    const w = img.naturalWidth || img.width || 512;
-    const h = img.naturalHeight || img.height || 512;
     
     const c = document.createElement('canvas');
     c.width = w; 
@@ -668,9 +667,9 @@ export default function App() {
               if (origGreyscaleMap) {
                 greyMat.map = origGreyscaleMap;
                 greyMat.color.set(0xd4d0cc);
-              } else {
-                // FIXED: If greyscale fails, use original texture but ensure color is light
-                greyMat.map = origMat.map;
+            } else if (origMat.map) {
+                greyMat.map = origMat.map.clone();
+                greyMat.map.needsUpdate = true;
                 greyMat.color.set(0xd4d0cc);
               }
             }
