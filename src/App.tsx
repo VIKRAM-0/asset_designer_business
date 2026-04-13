@@ -636,11 +636,15 @@ export default function App() {
             let origGreyscaleMap = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
-              if (origGreyscaleMap) greyMat.map = origGreyscaleMap;
+              // Fall back to original map if greyscale conversion fails
+              greyMat.map = origGreyscaleMap ?? origMat.map;
             }
 
             // Don't set default color - fabrics will handle this
             greyMat.needsUpdate = true;
+            if (!greyMat.map) {
+              greyMat.color.set(0xcccccc);
+            }
 
             // ── SPATIAL NAMING ─────────────────────────────────────────
             // Scraped GLBs have no useful names. Ignore them entirely and 
