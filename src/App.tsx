@@ -613,9 +613,17 @@ export default function App() {
           materials.forEach((origMat: any, index) => {
             const greyMat = new THREE.MeshPhysicalMaterial({});
             
-            if (origMat.color) greyMat.color.copy(origMat.color);
-            greyMat.roughness = origMat.roughness !== undefined ? origMat.roughness : 0.7;
-            greyMat.metalness = origMat.metalness !== undefined ? origMat.metalness : 0.0;
+            if (origMat.color) {
+              const c = origMat.color;
+              // Only copy if not black — black means missing baseColorFactor in GLB
+              if (c.r + c.g + c.b > 0.05) {
+                greyMat.color.copy(origMat.color);
+              } else {
+                greyMat.color.set(0xc8c0b8);  // neutral warm grey fallback
+              }
+            } else {
+              greyMat.color.set(0xc8c0b8);
+            }
             
             if (origMat.map) greyMat.map = origMat.map;
             if (origMat.normalMap) {
@@ -636,8 +644,11 @@ export default function App() {
             let origGreyscaleMap = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
-              // Fall back to original map if greyscale conversion fails
               greyMat.map = origGreyscaleMap ?? origMat.map;
+            }
+            // Ensure color is always visible regardless of map
+            if (!greyMat.map || greyMat.color.r + greyMat.color.g + greyMat.color.b < 0.05) {
+              greyMat.color.set(0xc8c0b8);
             }
 
             // Don't set default color - fabrics will handle this
