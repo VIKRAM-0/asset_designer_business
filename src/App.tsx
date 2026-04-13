@@ -612,32 +612,35 @@ export default function App() {
 
           materials.forEach((origMat: any, index) => {
             // Build greyMat — the material used when a part is selected/configured.
-            // Start with safe defaults so it is ALWAYS visible.
+            // Always starts visible with a neutral warm grey.
             const greyMat = new THREE.MeshPhysicalMaterial({
-              color: new THREE.Color(0xc8c0b8),
-              roughness: 0.7,
+              color: new THREE.Color(0xc8c0b8),  // warm grey — visible without any map
+              roughness: 0.75,
               metalness: 0.0,
               side: THREE.DoubleSide,
               sheen: 0,
             });
             greyMat.sheenRoughness = 0.5;
 
-            // Copy material properties from origMat where they are meaningful
-            if (origMat.roughness !== undefined) greyMat.roughness = origMat.roughness;
-            if (origMat.metalness !== undefined) greyMat.metalness = origMat.metalness;
+            // Preserve transparency if the original material uses it
             if (origMat.transparent) {
               greyMat.transparent = true;
               greyMat.opacity = origMat.opacity ?? 1;
               greyMat.alphaTest = origMat.alphaTest ?? 0;
             }
 
-            // Copy origMat color only if it is a visible non-black color
+            // Copy origMat color only if it is a visible (non-black) color.
+            // Do NOT copy if it is white — white + DoubleSide + env = blown out.
             if (origMat.color) {
               const c = origMat.color;
-              if (c.r + c.g + c.b > 0.1) greyMat.color.copy(c);
+              const brightness = c.r + c.g + c.b;
+              if (brightness > 0.1 && brightness < 2.9) {
+                greyMat.color.copy(c);
+              }
+              // else keep the default 0xc8c0b8 grey
             }
 
-            // Copy maps
+            // Copy normal/roughness/metalness maps from origMat
             if (origMat.normalMap) {
               greyMat.normalMap = origMat.normalMap;
               if (origMat.normalScale) greyMat.normalScale.copy(origMat.normalScale);
@@ -645,13 +648,16 @@ export default function App() {
             if (origMat.roughnessMap) greyMat.roughnessMap = origMat.roughnessMap;
             if (origMat.metalnessMap) greyMat.metalnessMap = origMat.metalnessMap;
 
-            // Greyscale the diffuse map if present; fall back to original if it fails
+            // Greyscale the diffuse map if present; fall back to original map.
+            // If no map exists (cushions use plain PBR color), keep the grey color.
             let origGreyscaleMap: THREE.Texture | null = null;
             if (origMat.map) {
               origGreyscaleMap = makeGreyscaleTex(origMat.map);
               greyMat.map = origGreyscaleMap ?? origMat.map;
-              greyMat.color.set(0xffffff); // white so map shows at full brightness
+              // Set neutral multiplier so greyscale map renders at correct brightness
+              greyMat.color.set(0xd4d0cc);
             }
+            // No map → greyMat.color stays as the warm grey set above
 
             greyMat.needsUpdate = true;
 
