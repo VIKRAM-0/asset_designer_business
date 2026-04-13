@@ -550,6 +550,13 @@ export default function App() {
             mat.roughnessMap = rt;
           }
           mat.needsUpdate = true;
+          // Re-assign mesh.material so Three.js detects the material change
+          if (Array.isArray(entry.mesh.material)) {
+            const arr = entry.mesh.material as THREE.Material[];
+            const updated = [...arr];
+            updated[entry.matIndex] = mat;
+            entry.mesh.material = updated;
+          }
         });
         return next;
       });
@@ -632,6 +639,14 @@ export default function App() {
             // can output gl_FragColor.a=0 making the mesh invisible against the
             // white page background). Cloning preserves the working shader type.
             const greyMat = origMat.clone() as THREE.MeshPhysicalMaterial;
+
+            // CRITICAL: clear GLTF shader patches inherited from origMat.
+            // GLTFLoader sets onBeforeCompile on materials with KHR_* extensions
+            // (specular-glossiness, clearcoat, etc). These patches redirect UV sets
+            // and texture slots. If the clone keeps them, fabric textures we apply
+            // later get sampled from the wrong UV channel and never appear on screen.
+            greyMat.onBeforeCompile = () => {};
+            (greyMat as any).customProgramCacheKey = () => greyMat.uuid;
 
             // Clear all maps — texture alpha channels would make fragments transparent
             greyMat.color.set(0xd4d0cc);
@@ -1054,6 +1069,13 @@ export default function App() {
             mat.roughness = rgh;
             mat.metalness = mtl;
             mat.needsUpdate = true;
+            // Re-assign mesh.material so Three.js detects the material change
+            if (Array.isArray(entry.mesh.material)) {
+              const arr = entry.mesh.material as THREE.Material[];
+              const updated = [...arr];
+              updated[entry.matIndex] = mat;
+              entry.mesh.material = updated;
+            }
           }
         });
         return next;
