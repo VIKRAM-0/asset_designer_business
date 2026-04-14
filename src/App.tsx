@@ -536,16 +536,18 @@ export default function App() {
           } else {
             mat.map = null;
           }
+          const BASE_TILE = 0.3;
+          const physRepeat = texScale * (entry.uvScaleFactor / BASE_TILE);
           if (normTex) {
             const nt = normTex.clone();
-            nt.repeat.set(texScale, texScale);
+            nt.repeat.set(physRepeat, physRepeat);
             nt.needsUpdate = true;
             mat.normalMap = nt;
             mat.normalScale.set(normScale, normScale);
           }
           if (roughTex) {
             const rt = roughTex.clone();
-            rt.repeat.set(texScale, texScale);
+            rt.repeat.set(physRepeat, physRepeat);
             rt.needsUpdate = true;
             mat.roughnessMap = rt;
           }
@@ -924,16 +926,18 @@ export default function App() {
             mat.color.setRGB(0.9, 0.9, 0.9);
           }
           
+          const BASE_TILE = 0.3;
+          const physRepeat = texScale * (entry.uvScaleFactor / BASE_TILE);
           if (normTex) {
             const nt = normTex.clone();
-            nt.repeat.set(texScale, texScale);
+            nt.repeat.set(physRepeat, physRepeat);
             nt.needsUpdate = true;
             mat.normalMap = nt;
             mat.normalScale.set(normScale, normScale);
           }
           if (roughTex) {
             const rt = roughTex.clone();
-            rt.repeat.set(texScale, texScale);
+            rt.repeat.set(physRepeat, physRepeat);
             rt.needsUpdate = true;
             mat.roughnessMap = rt;
           }
@@ -1034,10 +1038,17 @@ export default function App() {
             // FIXED: Ensure we start with a visible base
             mat.color.setRGB(1, 1, 1);
             
+            // Per-mesh repeat: scale by physical size so fabric tiles
+            // at the same real-world density on every part.
+            // uvScaleFactor = maxDim of this mesh in scene units.
+            // BASE_TILE = reference size where scl looks correct (armrest ~0.3).
+            const BASE_TILE = 0.3;
+            const physRepeat = scl * (entry.uvScaleFactor / BASE_TILE);
+
             if (diffTex) {
               const dt = diffTex.clone();
               dt.wrapS = dt.wrapT = THREE.RepeatWrapping;
-              dt.repeat.set(scl, scl);
+              dt.repeat.set(physRepeat, physRepeat);
               dt.needsUpdate = true;
               mat.map = dt;
             } else {
@@ -1046,7 +1057,7 @@ export default function App() {
             if (normTex) {
               const nt = normTex.clone();
               nt.wrapS = nt.wrapT = THREE.RepeatWrapping;
-              nt.repeat.set(scl, scl);
+              nt.repeat.set(physRepeat, physRepeat);
               nt.needsUpdate = true;
               mat.normalMap = nt;
             } else {
@@ -1055,7 +1066,7 @@ export default function App() {
             if (roughTex) {
               const rt = roughTex.clone();
               rt.wrapS = rt.wrapT = THREE.RepeatWrapping;
-              rt.repeat.set(scl, scl);
+              rt.repeat.set(physRepeat, physRepeat);
               rt.needsUpdate = true;
               mat.roughnessMap = rt;
             } else {
@@ -1133,16 +1144,18 @@ export default function App() {
       const next = [...prev];
       next.forEach(entry => {
         if (!entry.checked) return;
+        const BASE_TILE = 0.3;
+        const physRepeat = val * (entry.uvScaleFactor / BASE_TILE);
         if (entry.greyMat.map && entry.greyMat.map !== entry.origGreyscaleMap) {
-          entry.greyMat.map.repeat.set(val, val);
+          entry.greyMat.map.repeat.set(physRepeat, physRepeat);
           entry.greyMat.map.needsUpdate = true;
         }
         if (entry.greyMat.normalMap) {
-          entry.greyMat.normalMap.repeat.set(val, val);
+          entry.greyMat.normalMap.repeat.set(physRepeat, physRepeat);
           entry.greyMat.normalMap.needsUpdate = true;
         }
         if (entry.greyMat.roughnessMap) {
-          entry.greyMat.roughnessMap.repeat.set(val, val);
+          entry.greyMat.roughnessMap.repeat.set(physRepeat, physRepeat);
           entry.greyMat.roughnessMap.needsUpdate = true;
         }
         entry.greyMat.needsUpdate = true;
